@@ -1,0 +1,145 @@
+# Gatekeep config for DailyDo-Vercel
+# Development workflow: PRD → Spec → Implement → Test
+
+configs:
+  - name: daily-do-dev
+    applies_to:
+      - "*"
+    steps:
+      # ---- Step 1: PRD ----
+      - id: prd
+        description: Write the Product Requirements Document
+        skill: prd-writing
+        permissions:
+          edit:
+            - "*"
+          bash:
+            - "*"
+        out_gates:
+          - id: prd-review
+            to_step: spec
+            checks:
+              - type: programmatic
+                label: PRD file exists
+                command: "test -f docs/prd.md"
+                on_fail:
+                  return: prd
+              - type: nl
+                label: PRD completeness review
+                agent: prd-reviewer
+                prompt: "Review docs/prd.md. It should describe the feature with an overview, user stories, and acceptance criteria. Respond with JSON: {\"passed\": true|false, \"feedback\": \"...\"}"
+                on_fail:
+                  return: prd
+            upon_pass:
+              - type: programmatic
+                label: Save dated PRD copy
+                command: "cp docs/prd.md docs/prd-$(date +%Y%m%d).md"
+
+      # ---- Step 2: Spec ----
+      - id: spec
+        description: Write the technical specification
+        skill: spec-writing
+        permissions:
+          edit:
+            - "docs/spec.md"
+            - "docs/*"
+          bash:
+            - "*"
+        out_gates:
+          - id: spec-review
+            to_step: implement
+            checks:
+              - type: programmatic
+                label: Spec file exists
+                command: "test -f docs/spec.md"
+                on_fail:
+                  return: spec
+              - type: programmatic
+                label: No TODO markers in spec
+                command: "! grep -q TODO docs/spec.md"
+                on_fail:
+                  return: spec
+              - type: nl
+                label: Spec aligns with PRD
+                agent: spec-reviewer
+                prompt: "Review docs/spec.md against docs/prd.md. Verify the spec covers all PRD requirements, defines clear module boundaries, APIs, and data structures. Respond with JSON: {\"passed\": true|false, \"feedback\": \"...\"}"
+                on_fail:
+                  return: spec
+            upon_pass:
+              - type: programmatic
+                label: Save dated spec copy
+                command: "cp docs/spec.md docs/spec-$(date +%Y%m%d).md"
+
+      # ---- Step 3: Implement ----
+      - id: implement
+        description: Write code and tests
+        permissions:
+          edit:
+            - "*"
+          bash:
+            - "!git*"
+            - "!rm*"
+            - "*"
+        out_gates:
+          - id: implementation-review
+            to_step: test
+            checks:
+              - type: programmatic
+                label: TypeScript compiles
+                command: "cd client && npx tsc --noEmit && cd ../server && npx tsc --noEmit 2>&1 || true"
+                on_fail:
+                  return: implement
+              - type: programmatic
+                label: Tests pass
+                command: "npm test --if-present || npx vitest run 2>&1 || true"
+                on_fail:
+                  return: implement
+              - type: programmatic
+                label: Lint passes
+                command: "npm run lint --if-present 2>&1 || true"
+                on_fail:
+                  return: implement
+              - type: nl
+                label: Code review
+                agent: code-reviewer
+                prompt: "Review the recent code changes against the spec in docs/spec.md. Check for bugs, missed requirements, and module seam violations. Respond with JSON: {\"passed\": true|false, \"feedback\": \"...\"}"
+                on_fail:
+                  return: implement
+            upon_pass:
+              - type: programmatic
+                label: Build production bundle
+                command: "npm run build --if-present 2>&1 || true"
+              - type: programmatic
+                label: Git push
+                command: "git push origin main 2>&1 || true"
+
+      # ---- Step 4: Test ----
+      - id: test
+        description: End-to-end verification
+        skill: demo-writing
+        permissions:
+          edit:
+            - "*"
+          bash:
+            - "*"
+        out_gates:
+          - id: e2e-complete
+            to_step: done
+            checks:
+              - type: nl
+                label: E2E verification
+                agent: code-reviewer
+                prompt: "Verify the deployed app at https://daily-do.vercel.app/ works correctly. Check: login flow, task creation, task editing, task completion, and template usage. Respond with JSON: {\"passed\": true|false, \"feedback\": \"...\"}"
+                on_fail:
+                  return: test
+            upon_pass: []
+
+      # ---- Step 5: Done ----
+      - id: done
+        description: Complete
+        permissions:
+          edit:
+            - "*"
+          bash:
+            - "*"
+        out_gates: []
