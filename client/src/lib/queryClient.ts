@@ -1,34 +1,8 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
-/**
- * When the server tells us the user's Google connection is broken, bounce
- * them through the OAuth flow to mint a fresh refresh token. Exported as a
- * reassignable function so tests can stub the redirect.
- */
-export const reauthRedirect = {
-  go(): void {
-    if (typeof window !== "undefined") {
-      window.location.href = "/api/login";
-    }
-  },
-};
-
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
-    // The server signals "your refresh token is dead" with
-    // 401 + JSON body { code: "REAUTH_REQUIRED", message }. Redirect through
-    // OAuth so Google can hand us a fresh grant.
-    if (res.status === 401 && text) {
-      try {
-        const parsed = JSON.parse(text);
-        if (parsed?.code === "REAUTH_REQUIRED") {
-          reauthRedirect.go();
-        }
-      } catch {
-        // not JSON — fall through to the normal error path
-      }
-    }
     throw new Error(`${res.status}: ${text}`);
   }
 }

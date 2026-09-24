@@ -5,7 +5,7 @@ import {
   taskTemplates,
   dailyTasks,
   holidays,
-  userSettings,
+  deadlines,
   customStreaks,
   customStreakEntries,
 } from "../shared/schema.js";
@@ -18,18 +18,17 @@ import type {
   InsertDailyTask,
   Holiday,
   InsertHoliday,
-  UserSettings,
+  Deadline,
+  InsertDeadline,
   CustomStreak,
   InsertCustomStreak,
   CustomStreakEntry,
 } from "../shared/schema.js";
 
 export interface IStorage {
-  getUserByGoogleId(googleId: string): Promise<User | undefined>;
+  getUserByUsername(username: string): Promise<User | undefined>;
   getUserById(id: number): Promise<User | undefined>;
-  listUsers(): Promise<User[]>;
   createUser(user: InsertUser): Promise<User>;
-  updateUser(id: number, data: Partial<User>): Promise<User>;
 
   deleteAllUserTemplates(userId: number): Promise<void>;
   deleteAllUserDailyTasks(userId: number): Promise<void>;
@@ -57,8 +56,12 @@ export interface IStorage {
   deleteHoliday(id: number): Promise<void>;
   isHoliday(userId: number, date: string): Promise<boolean>;
 
-  getSettings(userId: number): Promise<UserSettings | undefined>;
-  upsertSettings(userId: number, data: Partial<UserSettings>): Promise<UserSettings>;
+  getDeadlines(userId: number): Promise<Deadline[]>;
+  getDeadlineById(id: number, userId: number): Promise<Deadline | undefined>;
+  getDeadlinesDueOn(userId: number, date: string): Promise<Deadline[]>;
+  createDeadline(deadline: InsertDeadline): Promise<Deadline>;
+  updateDeadline(id: number, data: Partial<Deadline>, userId: number): Promise<Deadline | undefined>;
+  deleteDeadline(id: number, userId: number): Promise<void>;
 
   getCustomStreaks(userId: number): Promise<CustomStreak[]>;
   createCustomStreak(streak: InsertCustomStreak): Promise<CustomStreak>;
@@ -70,11 +73,11 @@ export interface IStorage {
 }
 
 class DatabaseStorage implements IStorage {
-  async getUserByGoogleId(googleId: string): Promise<User | undefined> {
+  async getUserByUsername(username: string): Promise<User | undefined> {
     const [user] = await db
       .select()
       .from(users)
-      .where(eq(users.googleId, googleId));
+      .where(eq(users.username, username));
     return user;
   }
 
@@ -83,22 +86,9 @@ class DatabaseStorage implements IStorage {
     return user;
   }
 
-  async listUsers(): Promise<User[]> {
-    return db.select().from(users);
-  }
-
   async createUser(user: InsertUser): Promise<User> {
     const [created] = await db.insert(users).values(user).returning();
     return created;
-  }
-
-  async updateUser(id: number, data: Partial<User>): Promise<User> {
-    const [updated] = await db
-      .update(users)
-      .set(data)
-      .where(eq(users.id, id))
-      .returning();
-    return updated;
   }
 
   async deleteAllUserTemplates(userId: number): Promise<void> {
@@ -297,33 +287,60 @@ class DatabaseStorage implements IStorage {
     return !!holiday;
   }
 
-  async getSettings(userId: number): Promise<UserSettings | undefined> {
-    const [settings] = await db
+  async getDeadlines(userId: number): Promise<Deadline[]> {
+    return db
       .select()
-      .from(userSettings)
-      .where(eq(userSettings.userId, userId));
-    return settings;
+      .from(deadlines)
+      .where(eq(deadlines.userId, userId))
+      .orderBy(asc(deadlines.dueDate), asc(deadlines.name));
   }
 
-  async upsertSettings(
-    userId: number,
-    data: Partial<UserSettings>,
-  ): Promise<UserSettings> {
-    const existing = await this.getSettings(userId);
-    if (existing) {
-      const [updated] = await db
-        .update(userSettings)
-        .set(data)
-        .where(eq(userSettings.userId, userId))
-        .returning();
-      return updated;
-    }
-    const [created] = await db
-      .insert(userSettings)
-      .values({ userId, ...data } as any)
-      .returning();
+  async getDeadlineById(id: number, userId: number): Promise<Deadline | undefined> {
+    const [deadline] = await db
+      .select()
+      .from(deadlines)
+      .where(and(eq(deadlines.id, id), eq(deadlines.userId, userId)));
+    return deadline;
+  }
+
+  async getDeadlinesDueOn(userId: number, date: string): Promise<Deadline[]> {
+    return db
+      .select()
+      .from(deadlines)
+      .where(
+        and(
+          eq(deadlines.userId, userId),
+          eq(deadlines.dueDate, date),
+          eq(deadlines.isDone, false),
+        ),
+      )
+      .orderBy(asc(deadlines.name));
+  }
+
+  async createDeadline(deadline: InsertDeadline): Promise<Deadline> {
+    const [created] = await db.insert(deadlines).values(deadline).returning();
     return created;
   }
+
+  async updateDeadline(
+    id: number,
+    data: Partial<Deadline>,
+    userId: number,
+  ): Promise<Deadline | undefined> {
+    const [updated] = await db
+      .update(deadlines)
+      .set(data)
+      .where(and(eq(deadlines.id, id), eq(deadlines.userId, userId)))
+      .returning();
+    return updated;
+  }
+
+  async deleteDeadline(id: number, userId: number): Promise<void> {
+    await db
+      .delete(deadlines)
+      .where(and(eq(deadlines.id, id), eq(deadlines.userId, userId)));
+  }
+
   async getCustomStreaks(userId: number): Promise<CustomStreak[]> {
     return db
       .select()

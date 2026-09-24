@@ -228,6 +228,7 @@ export default function TodayPage() {
         deadlineOriginalDate: null,
         deadlinePutOffDays: null,
         deadlineBucket: null,
+        deadlineId: null,
       };
       queryClient.setQueryData<DailyTask[]>(
         ["/api/days", date, "tasks"],
@@ -324,7 +325,7 @@ export default function TodayPage() {
       }
       toast({
         title: "Failed to complete deadline",
-        description: error.message || "Could not update spreadsheet",
+        description: error.message || "Could not update deadline",
         variant: "destructive",
       });
     },
@@ -332,6 +333,7 @@ export default function TodayPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/days", date, "tasks"] });
       queryClient.invalidateQueries({ queryKey: ["/api/days/summary"] });
       queryClient.invalidateQueries({ queryKey: ["/api/streaks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/deadlines"] });
     },
   });
 
@@ -356,7 +358,7 @@ export default function TodayPage() {
       }
       toast({
         title: "Failed to put off deadline",
-        description: error.message || "Could not update spreadsheet",
+        description: error.message || "Could not update deadline",
         variant: "destructive",
       });
     },
@@ -364,6 +366,7 @@ export default function TodayPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/days", date, "tasks"] });
       queryClient.invalidateQueries({ queryKey: ["/api/days/summary"] });
       queryClient.invalidateQueries({ queryKey: ["/api/streaks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/deadlines"] });
     },
   });
 
@@ -388,7 +391,7 @@ export default function TodayPage() {
       }
       toast({
         title: "Failed to undo deadline",
-        description: error.message || "Could not update spreadsheet",
+        description: error.message || "Could not update deadline",
         variant: "destructive",
       });
     },

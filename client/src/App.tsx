@@ -14,6 +14,7 @@ import HistoryPage from "@/pages/history";
 import TemplatesPage from "@/pages/templates";
 import SettingsPage from "@/pages/settings";
 import CustomStreaksPage from "@/pages/custom-streaks";
+import DeadlinesPage from "@/pages/deadlines";
 import { VersionBadge } from "@/components/version-badge";
 
 function Router() {
@@ -23,6 +24,7 @@ function Router() {
       <Route path="/day/:date" component={TodayPage} />
       <Route path="/history" component={HistoryPage} />
       <Route path="/streaks" component={CustomStreaksPage} />
+      <Route path="/deadlines" component={DeadlinesPage} />
       <Route path="/templates" component={TemplatesPage} />
       <Route path="/settings" component={SettingsPage} />
       <Route component={NotFound} />
@@ -54,7 +56,7 @@ function AuthenticatedApp() {
 }
 
 function AppContent() {
-  const { user, isLoading, login } = useAuth();
+  const { user, isLoading } = useAuth();
 
   if (isLoading) {
     return (
@@ -69,7 +71,7 @@ function AppContent() {
   }
 
   if (!user) {
-    return <LoginPage onLogin={() => login()} />;
+    return <LoginPage />;
   }
 
   return <AuthenticatedApp />;

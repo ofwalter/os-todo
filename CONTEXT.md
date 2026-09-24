@@ -1,6 +1,6 @@
-# DailyDo-Vercel
+# os-todo
 
-Vercel-adapted version of the hierarchical template-based daily task tracker. A React + Vite frontend communicates with an Express.js API running as a single Vercel serverless function (`api/index.ts`). Uses Google OAuth for authentication, Neon Postgres via Drizzle ORM, and integrates with Google Sheets for deadline tracking.
+Personal, single-user fork of DailyDo (hierarchical template-based daily task tracker). A React + Vite frontend communicates with an Express.js API running as a single Vercel serverless function (`api/index.ts`). Single-password auth, Neon Postgres via Drizzle ORM. No Google integration.
 
 **This is a standalone git repository and the root of the project.**
 
@@ -25,29 +25,18 @@ Uses Gatekeep (`github.com/Stephen-Schuster/gatekeep`) for enforced step-by-step
 
 ## Auth
 
-- `server/auth/index.ts` — Passport + `passport-google-oauth20`. Sessions in Postgres via `connect-pg-simple` (`sessions` table).
-- Login: `GET /api/login` → Google. Callback: `GET /api/callback`. Logout: `GET /api/logout`. Current user: `GET /api/auth/user`.
-- Scopes requested on every login (with `prompt=consent`, `access_type=offline`): `openid email profile https://www.googleapis.com/auth/spreadsheets`. The Sheets scope means we get a refresh token we can reuse for the user's Google Sheets.
-- `users.google_id` stores Google's `profile.id` (the OIDC `sub`). `users.refresh_token` stores the long-lived refresh token for Sheets.
-- `req.appUser` is populated by the `resolveAppUser` middleware in `server/routes.ts` from the session's `googleId`.
+- `server/auth/index.ts` — single-user password login. Sessions in Postgres via `express-session` + `connect-pg-simple` (`sessions` table).
+- `APP_PASSWORD_HASH` env var holds `scrypt$<salt hex>$<hash hex>` (see `server/auth/password.ts`). Generate with `npm run hash-password -- "pw"`.
+- Endpoints: `POST /api/login` `{password}` → sets `req.session.userId`; `POST /api/logout`; `GET /api/auth/user`.
+- There is one DB user (`username = "owner"`), auto-created on first successful login by `ensureOwnerUser()`. All data is still keyed by `userId`, so the multi-user schema is intact if ever needed.
 - Protected routes use `requireAuth = [isAuthenticated, resolveAppUser]`. After that, `req.appUser.id` is the integer user ID used for all storage queries.
-- **Pitfall:** `req.user` from Passport contains a `SessionUser` (lightweight session struct), not the DB `User`. Always go through `resolveAppUser` to get `req.appUser`.
-- **Pitfall:** Google may not return a refresh token on subsequent logins — `prompt: "consent"` forces the consent screen each time. Do not remove without a plan.
-
-### DEV_BYPASS_AUTH (test mode)
-
-- Setting `DEV_BYPASS_AUTH=true` short-circuits the entire auth flow: every request is auto-authenticated as a fixed bypass user (`googleId: dev-bypass-test-user`).
-- The bypass user is auto-created on first request and pinned to a public test sheet. Settings.spreadsheetId is forced to that sheet ID.
-- The bypass user has no real OAuth grant, so it borrows a refresh token from any other (real) user in the DB. If no real user has ever logged in, Sheets calls will fail with "Google account is not connected".
-- `GoogleStrategy` registration is guarded by presence of `GOOGLE_CLIENT_ID/SECRET` so the app boots in bypass mode without OAuth env vars. `/api/login` and `/api/callback` no-op-redirect to `/`.
-- The bypass user load is memoized at module scope (`bypassUserPromise`) — failure clears the cache so the next request retries.
-- **Pitfall:** `vi.mock('../storage.js')` must precede `await import('./index.js')` in tests because the auth module captures the storage reference at import time.
+- Failed logins sleep 1s before responding to slow down guessing.
 
 ## Database
 
 - Neon serverless driver (`@neondatabase/serverless`) + `drizzle-orm/neon-serverless` (WebSocket-based Pool, supports transactions). Required for Vercel serverless because `pg` Pool doesn't play well with short-lived functions.
 - `npm run db:push` creates/syncs schema.
-- **Pitfall:** The `users.google_id` column is named `google_id` in the DB but `googleId` in TS. Drizzle maps these. If you write raw SQL, use the snake_case form.
+- Columns are snake_case in the DB and camelCase in TS; Drizzle maps them. Use snake_case in raw SQL.
 
 ## Import / Export
 
@@ -59,20 +48,13 @@ Uses Gatekeep (`github.com/Stephen-Schuster/gatekeep`) for enforced step-by-step
 - **Pitfall:** `if (!node.parentId)` is wrong for ID 0. Use `node.parentId == null`.
 - Postgres parameter cap is 65535. Daily tasks have ~14 columns; chunk at 1000 rows to keep a generous margin.
 
-## Google Sheets Integration
+## Deadlines & Chores
 
-- `server/googleSheets.ts` — every public function takes `userId` first. Internally it loads the user's `refreshToken`, exchanges it for an access token via `google.auth.OAuth2.refreshAccessToken()`, and caches the access token in-memory (per cold-start instance).
-- If Google rotates the refresh token, we persist the new value.
-
-### REAUTH_REQUIRED Self-Healing
-
-- When Google rejects the stored refresh token (revoked, replaced, expired, password changed, hit per-client refresh-token cap), `getAccessTokenForUser` catches it, nulls `users.refresh_token`, clears the in-memory cache, and throws `ReauthRequiredError`.
-- Sheets-touching routes (`complete-deadline`, `putoff-deadline`, `undo-deadline`) call `sendSheetsError(res, err, fallback)` which maps that error to a **401** with `{code: "REAUTH_REQUIRED"}`.
-- The client (`queryClient.ts`) sees that code and bounces the user to `/api/login`, which reissues a fresh grant via `prompt=consent`.
-- **Pitfall:** Don't bubble the raw Google error string to the user. Always go through `sendSheetsError` for any Sheets-touching route.
-- **Pitfall:** Don't redirect to `/api/login` from inside `syncDeadlines` or other implicit Sheets calls — bouncing the user to OAuth on page render would be hostile. Implicit Sheets calls swallow errors with `console.error`. Only explicit user-initiated Sheets actions (deadline mutation routes) should surface `REAUTH_REQUIRED`.
-- **Pitfall:** A 403 from the Sheets API is ambiguous. It can mean (a) "the access token doesn't carry the `spreadsheets` scope" (fixable by re-consent) or (b) "this Google account doesn't have edit access on this spreadsheet" (fixable only by sharing the sheet). Distinguish via `isInsufficientScopeError`. Scope-insufficient → clear `refresh_token` + `ReauthRequiredError`. Other 403 → keep the existing "share edit access" message. Centralized in `handleSheetsApiError(userId, err)`.
-- **Pitfall:** In-memory `tokenCache` survives Google grant revocation. When a user revokes their grant and re-consents, the warm function instance still has the previous access token cached for up to 50 minutes. `auth/index.ts` calls `clearTokenCacheForUser(userId)` on every successful login. Also: `handleSheetsApiError` detects 401 invalid-credentials and treats it as `REAUTH_REQUIRED` so the user self-heals via redirect.
+- `deadlines` table: `name`, `dueDate` (YYYY-MM-DD), `repeatDays` (null = one-off; 30 = same day next month; 365 = same day next year; else N days), `bucket`, `isDone`.
+- Managed on `/deadlines` (`client/src/pages/deadlines.tsx`) via `GET/POST/PATCH/DELETE /api/deadlines`.
+- `syncDeadlines()` in `server/routes.ts` runs whenever a day's tasks are fetched: creates a `[Deadline] name` daily task (linked by `daily_tasks.deadline_id`) for each non-done deadline due that date, nested under a task whose title matches `bucket`; deletes still-incomplete deadline tasks whose deadline is no longer due that day.
+- Complete → recurring: `dueDate = computeNewDate(task.date, repeatDays)`; one-off: `isDone = true`. Put off → `dueDate = task.date + days`. Both store the previous `dueDate` in the task's `deadlineOriginalDate`; undo restores it and clears `isDone`.
+- **Pitfall:** Deadlines only appear on the exact due date. If you never open that day, the deadline sits in the past. The Deadlines page lists these under "Overdue".
 
 ## Versioning & Deploy
 
@@ -89,9 +71,9 @@ Uses Gatekeep (`github.com/Stephen-Schuster/gatekeep`) for enforced step-by-step
 
 - `npm test` runs vitest. Config in `vitest.config.ts`. Pattern: `{server,shared,client}/**/*.test.ts`.
 - `vitest.config.ts` MUST mirror the `@/` and `@shared/` aliases from `tsconfig.json` or imports break in test mode.
-- Tests cover: bypass auth helpers (`server/auth/index.test.ts`), import depth/chunk helpers (`server/import/depth.test.ts`), queryKey URL builder + REAUTH_REQUIRED redirect (`client/src/lib/queryClient.test.ts`), and the Sheets `invalid_grant` self-healing path (`server/googleSheets.test.ts`).
+- Tests cover: password hashing + owner user (`server/auth/index.test.ts`), deadline date math + validation (`server/deadlines.test.ts`), import depth/chunk helpers (`server/import/depth.test.ts`), and the queryKey URL builder (`client/src/lib/queryClient.test.ts`).
 - Use the `vi.mock` + dynamic `await import` pattern for module-level singletons.
-- **Pitfall:** When mocking a class constructor (e.g. `google.auth.OAuth2`), use a real class, not `vi.fn().mockImplementation(() => ({...}))`. The latter is a function but not a constructor — `new FakeOAuth2()` throws "is not a constructor". Pattern: `class FakeOAuth2 { setCredentials = vi.fn(); refreshAccessToken = vi.fn() }` and return that from the `vi.mock` factory.
+- **Pitfall:** When mocking a class constructor, use a real class, not `vi.fn().mockImplementation(() => ({...}))`. The latter is a function but not a constructor — `new FakeOAuth2()` throws "is not a constructor". Pattern: `class FakeOAuth2 { setCredentials = vi.fn(); refreshAccessToken = vi.fn() }` and return that from the `vi.mock` factory.
 
 ## Conventions
 
@@ -126,5 +108,5 @@ Uses Gatekeep (`github.com/Stephen-Schuster/gatekeep`) for enforced step-by-step
 - `client/` — React + Vite frontend: HTML shell, source code, and static assets (see CONTEXT.md for details)
 - `docs/` — Project documentation including setup guide for external services (see CONTEXT.md for details)
 - `scripts/` — Automation scripts for production deployment and version bumping (see CONTEXT.md for details)
-- `server/` — Express.js backend: API routes, Google OAuth, database access, Sheets integration (see CONTEXT.md for details)
+- `server/` — Express.js backend: API routes, password auth, database access, deadlines (see CONTEXT.md for details)
 - `shared/` — Drizzle ORM schema, Zod validation, and types shared between client and server (see CONTEXT.md for details)

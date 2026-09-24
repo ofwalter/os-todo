@@ -1,5 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { apiRequest, reauthRedirect } from "./queryClient";
+import { describe, it, expect } from "vitest";
 
 // Re-export the helper for testing. The current module doesn't export it, so
 // we re-implement the same logic here (kept in sync intentionally — it's tiny).
@@ -61,57 +60,5 @@ describe("buildUrlFromQueryKey", () => {
     expect(
       buildUrlFromQueryKey(["/api/x", 123, "?a=1"]),
     ).toBe("/api/x?a=1");
-  });
-});
-
-describe("apiRequest REAUTH_REQUIRED handling", () => {
-  beforeEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("triggers reauthRedirect.go on 401 + REAUTH_REQUIRED body", async () => {
-    const goSpy = vi.spyOn(reauthRedirect, "go").mockImplementation(() => {});
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(
-          JSON.stringify({ code: "REAUTH_REQUIRED", message: "expired" }),
-          { status: 401, headers: { "Content-Type": "application/json" } },
-        ),
-      ),
-    );
-
-    await expect(apiRequest("POST", "/api/tasks/1/complete-deadline")).rejects.toThrow(
-      /401/,
-    );
-    expect(goSpy).toHaveBeenCalledOnce();
-  });
-
-  it("does NOT redirect on plain 401 without REAUTH_REQUIRED code", async () => {
-    const goSpy = vi.spyOn(reauthRedirect, "go").mockImplementation(() => {});
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response("Unauthorized", { status: 401 }),
-      ),
-    );
-
-    await expect(apiRequest("GET", "/api/auth/user")).rejects.toThrow(/401/);
-    expect(goSpy).not.toHaveBeenCalled();
-  });
-
-  it("does NOT redirect on 500 errors", async () => {
-    const goSpy = vi.spyOn(reauthRedirect, "go").mockImplementation(() => {});
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ message: "server boom" }), { status: 500 }),
-      ),
-    );
-
-    await expect(apiRequest("POST", "/api/tasks/1/complete-deadline")).rejects.toThrow(
-      /500/,
-    );
-    expect(goSpy).not.toHaveBeenCalled();
   });
 });

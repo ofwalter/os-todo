@@ -5,7 +5,7 @@ import {
   holidays,
   customStreaks,
   customStreakEntries,
-  userSettings,
+  deadlines,
 } from "../../shared/schema.js";
 import { eq } from "drizzle-orm";
 import { groupByDepth, chunk } from "./depth.js";
@@ -21,7 +21,16 @@ export interface ImportPayload {
   holidays?: { date: string }[];
   customStreaks?: ImportedStreak[];
   customStreakEntries?: { streakId: number; date: string }[];
-  settings?: { spreadsheetId?: string | null } | null;
+  deadlines?: ImportedDeadline[];
+}
+
+export interface ImportedDeadline {
+  id: number;
+  name: string;
+  dueDate: string;
+  repeatDays?: number | null;
+  bucket?: string | null;
+  isDone?: boolean;
 }
 
 export interface ImportedTemplate {
@@ -46,6 +55,7 @@ export interface ImportedDailyTask {
   deadlineOriginalDate?: string | null;
   deadlinePutOffDays?: number | null;
   deadlineBucket?: string | null;
+  deadlineId?: number | null;
 }
 
 export interface ImportedStreak {
@@ -61,12 +71,12 @@ export interface ImportProgress {
   phase:
     | "starting"
     | "clearing"
+    | "deadlines"
     | "templates"
     | "dailyTasks"
     | "holidays"
     | "streaks"
     | "streakEntries"
-    | "settings"
     | "done";
   done: number;
   total: number;
@@ -81,6 +91,7 @@ export interface ImportResult {
   holidays: number;
   customStreaks: number;
   customStreakEntries: number;
+  deadlines: number;
 }
 
 /**
@@ -96,7 +107,7 @@ export interface ImportResult {
  *   3. Remap parent IDs from the old (export) ID space to the new (DB) ID
  *      space depth-by-depth, then bulk insert children.
  *   4. Bulk insert holidays / streaks / streak entries.
- *   5. Upsert settings.
+ * Deadlines go in first so daily tasks can be remapped to their new IDs.
  *
  * The whole thing runs in a single Drizzle transaction so a failure leaves
  * the user with their original data intact.
@@ -117,6 +128,7 @@ export async function importUserData(
   const tasksIn = Array.isArray(payload.dailyTasks) ? payload.dailyTasks : [];
   const holidaysIn = Array.isArray(payload.holidays) ? payload.holidays : [];
   const streaksIn = Array.isArray(payload.customStreaks) ? payload.customStreaks : [];
+  const deadlinesIn = Array.isArray(payload.deadlines) ? payload.deadlines : [];
   // Streak entries can come from either a flat array or nested under each streak.
   const flatEntries = Array.isArray(payload.customStreakEntries)
     ? payload.customStreakEntries
@@ -137,7 +149,7 @@ export async function importUserData(
     holidaysIn.length +
     streaksIn.length +
     allEntries.length +
-    1; // settings
+    deadlinesIn.length;
 
   let done = 0;
   const tick = (phase: ImportProgress["phase"], delta: number, message?: string) => {
@@ -153,6 +165,7 @@ export async function importUserData(
     holidays: 0,
     customStreaks: 0,
     customStreakEntries: 0,
+    deadlines: 0,
   };
 
   await db.transaction(async (tx) => {
@@ -162,6 +175,32 @@ export async function importUserData(
     await tx.delete(holidays).where(eq(holidays.userId, userId));
     // customStreakEntries cascade-delete via FK on customStreaks
     await tx.delete(customStreaks).where(eq(customStreaks.userId, userId));
+    await tx.delete(deadlines).where(eq(deadlines.userId, userId));
+
+    // ---- Deadlines ----
+    const deadlineIdMap = new Map<number, number>();
+    if (deadlinesIn.length) {
+      const rows = deadlinesIn.map((d) => ({
+        userId,
+        name: d.name,
+        dueDate: d.dueDate,
+        repeatDays: d.repeatDays || null,
+        bucket: d.bucket || null,
+        isDone: !!d.isDone,
+      }));
+      for (const part of chunk(rows, ROW_CHUNK)) {
+        const inserted = await tx
+          .insert(deadlines)
+          .values(part)
+          .returning({ id: deadlines.id });
+        const offset = rows.indexOf(part[0]);
+        for (let i = 0; i < inserted.length; i++) {
+          deadlineIdMap.set(deadlinesIn[offset + i].id, inserted[i].id);
+        }
+        result.deadlines += inserted.length;
+        tick("deadlines", inserted.length);
+      }
+    }
 
     // ---- Templates: bulk insert depth-by-depth, remapping parent IDs ----
     const templateIdMap = new Map<number, number>();
@@ -209,6 +248,7 @@ export async function importUserData(
         deadlineOriginalDate: t.deadlineOriginalDate ?? null,
         deadlinePutOffDays: t.deadlinePutOffDays ?? null,
         deadlineBucket: t.deadlineBucket ?? null,
+        deadlineId: t.deadlineId != null ? deadlineIdMap.get(t.deadlineId) ?? null : null,
       }));
       for (const part of chunk(rows, ROW_CHUNK)) {
         const inserted = await tx
@@ -279,24 +319,6 @@ export async function importUserData(
       tick("streakEntries", part.length);
     }
 
-    // ---- Settings ----
-    if (payload.settings && payload.settings.spreadsheetId !== undefined) {
-      const existing = await tx
-        .select()
-        .from(userSettings)
-        .where(eq(userSettings.userId, userId));
-      if (existing.length) {
-        await tx
-          .update(userSettings)
-          .set({ spreadsheetId: payload.settings.spreadsheetId })
-          .where(eq(userSettings.userId, userId));
-      } else {
-        await tx
-          .insert(userSettings)
-          .values({ userId, spreadsheetId: payload.settings.spreadsheetId });
-      }
-    }
-    tick("settings", 1);
   });
 
   onProgress({ phase: "done", done: totalSteps, total: totalSteps });

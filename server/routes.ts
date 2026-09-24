@@ -1,15 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { storage } from "./storage.js";
-import { setupAuth, isAuthenticated, registerAuthRoutes, type SessionUser } from "./auth/index.js";
-import {
-  getDeadlinesForDate,
-  computeNewDate,
-  updateDeadlineDateInSheet,
-  removeDeadlineFromSheet,
-  addDeadlineToSheet,
-  pushBackBucketDeadlines,
-  ReauthRequiredError,
-} from "./googleSheets.js";
+import { setupAuth, isAuthenticated, registerAuthRoutes } from "./auth/index.js";
+import { computeNewDate, deadlineInputSchema, deadlinePatchSchema } from "./deadlines.js";
 import type { DailyTask, TaskTemplate, User as AppUser } from "../shared/schema.js";
 import { importUserData } from "./import/importer.js";
 
@@ -21,29 +13,9 @@ declare global {
   }
 }
 
-/**
- * Map a Sheets-touching route error to an HTTP response. ReauthRequiredError
- * becomes a 401 with `{code: "REAUTH_REQUIRED"}` so the client can redirect
- * the user through the OAuth flow to mint a fresh refresh token. Everything
- * else stays a 500 with the original message (preserving previous behavior).
- */
-function sendSheetsError(res: Response, error: unknown, fallback: string): void {
-  if (error instanceof ReauthRequiredError) {
-    res.status(401).json({ message: error.message, code: error.code });
-    return;
-  }
-  const msg = (error as any)?.message || fallback;
-  res.status(500).json({ message: msg });
-}
-
 async function resolveAppUser(req: Request, res: Response, next: NextFunction) {
-  const sessionUser = req.user as SessionUser | undefined;
-  if (!sessionUser?.googleId) {
-    return res.status(401).json({ message: "Authentication required" });
-  }
-
   try {
-    const user = await storage.getUserByGoogleId(sessionUser.googleId);
+    const user = await storage.getUserById(req.session.userId!);
     if (!user) {
       return res.status(401).json({ message: "User not found" });
     }
@@ -115,67 +87,41 @@ async function cascadeStatusToChildren(taskId: number, userId: number, date: str
   }
 }
 
+/**
+ * Make the day's deadline tasks match the deadlines due on that date: create
+ * missing ones, drop incomplete ones that are no longer due, and keep name /
+ * bucket changes in sync.
+ */
 async function syncDeadlines(userId: number, date: string, tasks: DailyTask[]): Promise<void> {
-  const settings = await storage.getSettings(userId);
-  if (!settings?.spreadsheetId) return;
-
   try {
-    const deadlines = await getDeadlinesForDate(userId, settings.spreadsheetId, date);
-
-    const existingDeadlinesByName = new Map<string, DailyTask>();
-    for (const t of tasks) {
-      if (t.deadlineName) {
-        existingDeadlinesByName.set(t.deadlineName, t);
-      } else if (t.title.startsWith("[Deadline] ")) {
-        const name = t.title.replace("[Deadline] ", "");
-        if (!existingDeadlinesByName.has(name)) {
-          existingDeadlinesByName.set(name, t);
-        }
-      }
-    }
-
-    const sheetDeadlineNames = new Set(deadlines.map((d) => d.name));
-
-    const deadlineTasksByName = new Map<string, DailyTask[]>();
-    for (const t of tasks) {
-      if (t.title.startsWith("[Deadline] ")) {
-        const name = t.deadlineName || t.title.replace("[Deadline] ", "");
-        const list = deadlineTasksByName.get(name) || [];
-        list.push(t);
-        deadlineTasksByName.set(name, list);
-      }
-    }
+    const due = await storage.getDeadlinesDueOn(userId, date);
+    const dueIds = new Set(due.map((d) => d.id));
     const deletedIds = new Set<number>();
-    const entries = Array.from(deadlineTasksByName.values());
-    for (const dupes of entries) {
-      if (dupes.length > 1) {
-        const keep = dupes.find((t: DailyTask) => t.deadlineName) || dupes[0];
-        for (const t of dupes) {
-          if (t.id !== keep.id) {
-            await storage.deleteDailyTask(t.id, userId);
-            deletedIds.add(t.id);
-          }
-        }
+
+    const existingByDeadline = new Map<number, DailyTask>();
+    for (const t of tasks) {
+      if (t.deadlineId == null) continue;
+      if (existingByDeadline.has(t.deadlineId)) {
+        await storage.deleteDailyTask(t.id, userId);
+        deletedIds.add(t.id);
+      } else {
+        existingByDeadline.set(t.deadlineId, t);
+      }
+    }
+
+    for (const [deadlineId, task] of existingByDeadline) {
+      if (!dueIds.has(deadlineId) && task.status === "incomplete") {
+        await storage.deleteDailyTask(task.id, userId);
+        deletedIds.add(task.id);
       }
     }
 
     const liveTasks = tasks.filter((t) => !deletedIds.has(t.id));
-    existingDeadlinesByName.clear();
-    for (const t of liveTasks) {
-      if (t.deadlineName) {
-        existingDeadlinesByName.set(t.deadlineName, t);
-      } else if (t.title.startsWith("[Deadline] ")) {
-        const name = t.title.replace("[Deadline] ", "");
-        if (!existingDeadlinesByName.has(name)) {
-          existingDeadlinesByName.set(name, t);
-        }
-      }
-    }
 
-    const findBucketTask = (bucketName: string, taskList: DailyTask[]): DailyTask | undefined => {
+    const findBucketTask = (bucketName: string | null): DailyTask | undefined => {
       if (!bucketName) return undefined;
       const lower = bucketName.toLowerCase();
-      return taskList.find((t) => t.title.toLowerCase() === lower && !t.deadlineName);
+      return liveTasks.find((t) => t.title.toLowerCase() === lower && t.deadlineId == null);
     };
 
     const childCounters = new Map<number | null, number>();
@@ -189,62 +135,54 @@ async function syncDeadlines(userId: number, date: string, tasks: DailyTask[]): 
       return current;
     };
 
-    for (const [name, task] of existingDeadlinesByName) {
-      if (!sheetDeadlineNames.has(name) && task.status === "incomplete") {
-        await storage.deleteDailyTask(task.id, userId);
-        deletedIds.add(task.id);
-      }
-    }
+    for (const dl of due) {
+      const bucketTask = findBucketTask(dl.bucket);
+      const parentId = bucketTask ? bucketTask.id : null;
+      const title = `[Deadline] ${dl.name}`;
+      const repetition = dl.repeatDays ? String(dl.repeatDays) : null;
+      const existing = existingByDeadline.get(dl.id);
 
-    for (const dl of deadlines) {
-      const existing = existingDeadlinesByName.get(dl.name);
-      if (existing && deletedIds.has(existing.id)) continue;
-
-      const bucketTask = findBucketTask(dl.bucket, liveTasks.filter((t) => !deletedIds.has(t.id)));
-      const bucketParentId = bucketTask ? bucketTask.id : null;
-
-      if (existing) {
-        const updates: Partial<DailyTask> = {
-          deadlineName: dl.name,
-          deadlineRepetition: dl.repetition,
-          deadlineBucket: dl.bucket || null,
-        };
-
-        if (dl.bucket && bucketTask && existing.parentId !== bucketTask.id) {
-          updates.parentId = bucketTask.id;
-          updates.position = getNextPosition(bucketTask.id);
-        } else if (!dl.bucket && existing.parentId !== null) {
-          updates.parentId = null;
-          updates.position = getNextPosition(null);
+      if (existing && !deletedIds.has(existing.id)) {
+        const updates: Partial<DailyTask> = {};
+        if (existing.title !== title) updates.title = title;
+        if (existing.deadlineName !== dl.name) updates.deadlineName = dl.name;
+        if (existing.deadlineRepetition !== repetition) updates.deadlineRepetition = repetition;
+        if (existing.deadlineBucket !== dl.bucket) updates.deadlineBucket = dl.bucket;
+        if (existing.parentId !== parentId) {
+          updates.parentId = parentId;
+          updates.position = getNextPosition(parentId);
         }
-
+        // Still due today but marked done: it was moved back (e.g. edited on
+        // the Deadlines page), so reopen it.
         if (existing.status === "complete" || existing.status === "skipped") {
           updates.status = "incomplete";
           updates.deadlineOriginalDate = null;
           updates.deadlinePutOffDays = null;
         }
-
-        await storage.updateDailyTask(existing.id, updates, userId);
+        if (Object.keys(updates).length > 0) {
+          await storage.updateDailyTask(existing.id, updates, userId);
+        }
       } else {
         await storage.createDailyTask({
           userId,
           date,
-          parentId: bucketParentId,
-          title: `[Deadline] ${dl.name}`,
+          parentId,
+          title,
           status: "incomplete",
-          position: getNextPosition(bucketParentId),
+          position: getNextPosition(parentId),
           isExempt: false,
           isCollapsed: false,
           templateTaskId: null,
+          deadlineId: dl.id,
           deadlineName: dl.name,
-          deadlineRepetition: dl.repetition,
+          deadlineRepetition: repetition,
           deadlineOriginalDate: null,
-          deadlineBucket: dl.bucket || null,
+          deadlineBucket: dl.bucket,
         });
       }
     }
   } catch (e) {
-    console.error("Failed to fetch deadlines:", e);
+    console.error("Failed to sync deadlines:", e);
   }
 }
 
@@ -506,55 +444,36 @@ export async function registerRoutes(app: Express): Promise<void> {
   });
 
   app.post("/api/tasks/:id/complete-deadline", requireAuth, async (req, res) => {
+    const userId = req.appUser!.id;
     const id = parseInt(req.params.id as string);
-    const task = await storage.getDailyTaskById(id, req.appUser!.id);
+    const task = await storage.getDailyTaskById(id, userId);
 
-    if (!task || !task.deadlineName) {
+    if (!task || task.deadlineId == null) {
       return res.status(400).json({ message: "Not a deadline task" });
     }
 
-    const settings = await storage.getSettings(req.appUser!.id);
-    if (!settings?.spreadsheetId) {
-      return res.status(400).json({ message: "No spreadsheet configured" });
+    const deadline = await storage.getDeadlineById(task.deadlineId, userId);
+    if (deadline) {
+      // Recurring: roll forward from the day it was completed. One-off: done.
+      const update = deadline.repeatDays
+        ? { dueDate: computeNewDate(task.date, deadline.repeatDays) }
+        : { isDone: true };
+      await storage.updateDeadline(deadline.id, update, userId);
     }
 
-    try {
-      const rep = task.deadlineRepetition ? parseInt(task.deadlineRepetition) : 0;
+    await storage.updateDailyTask(id, {
+      status: "complete",
+      deadlineOriginalDate: deadline?.dueDate ?? task.date,
+    }, userId);
 
-      if (!rep || isNaN(rep)) {
-        await removeDeadlineFromSheet(
-          req.appUser!.id,
-          settings.spreadsheetId,
-          task.deadlineName,
-          task.date,
-        );
-      } else {
-        const newDate = computeNewDate(task.date, rep);
-        await updateDeadlineDateInSheet(
-          req.appUser!.id,
-          settings.spreadsheetId,
-          task.deadlineName,
-          task.date,
-          newDate,
-        );
-      }
+    await updateParentStatus(id, userId, task.date);
 
-      await storage.updateDailyTask(id, {
-        status: "complete",
-        deadlineOriginalDate: task.date,
-      }, req.appUser!.id);
-
-      await updateParentStatus(id, req.appUser!.id, task.date);
-
-      const allTasks = await storage.getDayTasks(req.appUser!.id, task.date);
-      res.json(allTasks);
-    } catch (error: any) {
-      console.error("Failed to complete deadline:", error);
-      sendSheetsError(res, error, "Failed to update spreadsheet");
-    }
+    const allTasks = await storage.getDayTasks(userId, task.date);
+    res.json(allTasks);
   });
 
   app.post("/api/tasks/:id/putoff-deadline", requireAuth, async (req, res) => {
+    const userId = req.appUser!.id;
     const id = parseInt(req.params.id as string);
     const { days } = req.body;
 
@@ -562,57 +481,38 @@ export async function registerRoutes(app: Express): Promise<void> {
       return res.status(400).json({ message: "days must be a positive number" });
     }
 
-    const task = await storage.getDailyTaskById(id, req.appUser!.id);
-    if (!task || !task.deadlineName) {
+    const task = await storage.getDailyTaskById(id, userId);
+    if (!task || task.deadlineId == null) {
       return res.status(400).json({ message: "Not a deadline task" });
     }
 
-    const settings = await storage.getSettings(req.appUser!.id);
-    if (!settings?.spreadsheetId) {
-      return res.status(400).json({ message: "No spreadsheet configured" });
-    }
-
-    try {
-      const newDate = computeNewDate(task.date, days);
-      await updateDeadlineDateInSheet(
-        req.appUser!.id,
-        settings.spreadsheetId,
-        task.deadlineName,
-        task.date,
-        newDate,
+    const deadline = await storage.getDeadlineById(task.deadlineId, userId);
+    if (deadline) {
+      await storage.updateDeadline(
+        deadline.id,
+        { dueDate: computeNewDate(task.date, days) },
+        userId,
       );
-
-      if (task.deadlineBucket && task.deadlineBucket.toLowerCase() === "exercise") {
-        await pushBackBucketDeadlines(
-          req.appUser!.id,
-          settings.spreadsheetId,
-          task.deadlineBucket,
-          days,
-          task.deadlineName,
-        );
-      }
-
-      await storage.updateDailyTask(id, {
-        status: "skipped",
-        deadlineOriginalDate: task.date,
-        deadlinePutOffDays: days,
-      }, req.appUser!.id);
-
-      await updateParentStatus(id, req.appUser!.id, task.date);
-
-      const allTasks = await storage.getDayTasks(req.appUser!.id, task.date);
-      res.json(allTasks);
-    } catch (error: any) {
-      console.error("Failed to put off deadline:", error);
-      sendSheetsError(res, error, "Failed to update spreadsheet");
     }
+
+    await storage.updateDailyTask(id, {
+      status: "skipped",
+      deadlineOriginalDate: deadline?.dueDate ?? task.date,
+      deadlinePutOffDays: days,
+    }, userId);
+
+    await updateParentStatus(id, userId, task.date);
+
+    const allTasks = await storage.getDayTasks(userId, task.date);
+    res.json(allTasks);
   });
 
   app.post("/api/tasks/:id/undo-deadline", requireAuth, async (req, res) => {
+    const userId = req.appUser!.id;
     const id = parseInt(req.params.id as string);
-    const task = await storage.getDailyTaskById(id, req.appUser!.id);
+    const task = await storage.getDailyTaskById(id, userId);
 
-    if (!task || !task.deadlineName) {
+    if (!task || task.deadlineId == null) {
       return res.status(400).json({ message: "Not a deadline task" });
     }
 
@@ -620,59 +520,22 @@ export async function registerRoutes(app: Express): Promise<void> {
       return res.status(400).json({ message: "No original date to restore" });
     }
 
-    const settings = await storage.getSettings(req.appUser!.id);
-    if (!settings?.spreadsheetId) {
-      return res.status(400).json({ message: "No spreadsheet configured" });
-    }
+    await storage.updateDeadline(
+      task.deadlineId,
+      { dueDate: task.deadlineOriginalDate, isDone: false },
+      userId,
+    );
 
-    try {
-      const rep = task.deadlineRepetition ? parseInt(task.deadlineRepetition) : 0;
-      const wasRemoved = task.status === "complete" && (!rep || isNaN(rep));
+    await storage.updateDailyTask(id, {
+      status: "incomplete",
+      deadlineOriginalDate: null,
+      deadlinePutOffDays: null,
+    }, userId);
 
-      if (wasRemoved) {
-        await addDeadlineToSheet(
-          req.appUser!.id,
-          settings.spreadsheetId,
-          task.deadlineName,
-          task.deadlineOriginalDate,
-          task.deadlineRepetition || "",
-          task.deadlineBucket || "",
-        );
-      } else {
-        let currentSheetDate: string;
-        if (task.status === "complete" && rep) {
-          currentSheetDate = computeNewDate(task.deadlineOriginalDate, rep);
-        } else {
-          if (task.deadlinePutOffDays) {
-            currentSheetDate = computeNewDate(task.deadlineOriginalDate, task.deadlinePutOffDays);
-          } else {
-            currentSheetDate = computeNewDate(task.deadlineOriginalDate, 1);
-          }
-        }
+    await updateParentStatus(id, userId, task.date);
 
-        await updateDeadlineDateInSheet(
-          req.appUser!.id,
-          settings.spreadsheetId,
-          task.deadlineName,
-          currentSheetDate,
-          task.deadlineOriginalDate,
-        );
-      }
-
-      await storage.updateDailyTask(id, {
-        status: "incomplete",
-        deadlineOriginalDate: null,
-        deadlinePutOffDays: null,
-      }, req.appUser!.id);
-
-      await updateParentStatus(id, req.appUser!.id, task.date);
-
-      const allTasks = await storage.getDayTasks(req.appUser!.id, task.date);
-      res.json(allTasks);
-    } catch (error: any) {
-      console.error("Failed to undo deadline:", error);
-      sendSheetsError(res, error, "Failed to update spreadsheet");
-    }
+    const allTasks = await storage.getDayTasks(userId, task.date);
+    res.json(allTasks);
   });
 
   app.post("/api/days/:date/reorder", requireAuth, async (req, res) => {
@@ -790,14 +653,45 @@ export async function registerRoutes(app: Express): Promise<void> {
     res.json({ success: true });
   });
 
-  app.get("/api/settings", requireAuth, async (req, res) => {
-    const settings = await storage.getSettings(req.appUser!.id);
-    res.json(settings || { spreadsheetId: null });
+  app.get("/api/deadlines", requireAuth, async (req, res) => {
+    res.json(await storage.getDeadlines(req.appUser!.id));
   });
 
-  app.patch("/api/settings", requireAuth, async (req, res) => {
-    const settings = await storage.upsertSettings(req.appUser!.id, req.body);
-    res.json(settings);
+  app.post("/api/deadlines", requireAuth, async (req, res) => {
+    const parsed = deadlineInputSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: parsed.error.issues[0].message });
+    }
+    const { repeatDays, ...rest } = parsed.data;
+    const deadline = await storage.createDeadline({
+      ...rest,
+      userId: req.appUser!.id,
+      repeatDays: repeatDays || null,
+    });
+    res.json(deadline);
+  });
+
+  app.patch("/api/deadlines/:id", requireAuth, async (req, res) => {
+    const parsed = deadlinePatchSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: parsed.error.issues[0].message });
+    }
+    const data = { ...parsed.data };
+    if ("repeatDays" in data) data.repeatDays = data.repeatDays || null;
+    const updated = await storage.updateDeadline(
+      parseInt(req.params.id as string),
+      data,
+      req.appUser!.id,
+    );
+    if (!updated) {
+      return res.status(404).json({ message: "Deadline not found" });
+    }
+    res.json(updated);
+  });
+
+  app.delete("/api/deadlines/:id", requireAuth, async (req, res) => {
+    await storage.deleteDeadline(parseInt(req.params.id as string), req.appUser!.id);
+    res.json({ success: true });
   });
 
   app.get("/api/custom-streaks", requireAuth, async (req, res) => {
@@ -869,14 +763,14 @@ export async function registerRoutes(app: Express): Promise<void> {
       allDays,
       holidays,
       customStreakData,
-      settings,
+      deadlines,
     ] = await Promise.all([
       storage.getTemplates(userId, "weekday"),
       storage.getTemplates(userId, "weekend"),
       storage.getAllUserDays(userId),
       storage.getHolidays(userId),
       storage.getCustomStreakData(userId),
-      storage.getSettings(userId),
+      storage.getDeadlines(userId),
     ]);
 
     const templates = [...weekdayTemplates, ...weekendTemplates];
@@ -892,14 +786,14 @@ export async function registerRoutes(app: Express): Promise<void> {
       customStreakEntries: customStreakData.flatMap((sd) =>
         sd.entries.map((e) => ({ streakId: sd.streak.id, date: e.date })),
       ),
-      settings: settings ? { spreadsheetId: settings.spreadsheetId } : null,
+      deadlines,
     };
 
     const dateStr = new Date().toISOString().slice(0, 10);
     res.setHeader("Content-Type", "application/json");
     res.setHeader(
       "Content-Disposition",
-      `attachment; filename="dailydo-export-${dateStr}.json"`,
+      `attachment; filename="os-todo-export-${dateStr}.json"`,
     );
     res.json(payload);
   });

@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   CalendarDays,
   CalendarPlus,
+  CalendarClock,
   History,
   LayoutTemplate,
   Settings,
@@ -169,6 +170,12 @@ export function AppSidebar() {
       url: "/streaks",
       icon: Zap,
       active: location === "/streaks",
+    },
+    {
+      title: "Deadlines",
+      url: "/deadlines",
+      icon: CalendarClock,
+      active: location === "/deadlines",
     },
     {
       title: "Templates",

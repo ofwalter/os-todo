@@ -2,7 +2,6 @@ import { useState, useRef, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Calendar,
-  Link2,
   Trash2,
   Plus,
   CalendarClock,
@@ -31,12 +30,12 @@ import type { Holiday } from "@shared/schema";
 const PHASE_LABELS: Record<string, string> = {
   starting: "Starting",
   clearing: "Clearing existing data",
+  deadlines: "Importing deadlines",
   templates: "Importing templates",
   dailyTasks: "Importing daily tasks",
   holidays: "Importing holidays",
   streaks: "Importing custom streaks",
   streakEntries: "Importing streak entries",
-  settings: "Saving settings",
   done: "Done",
 };
 function phaseLabel(phase: string): string {
@@ -47,7 +46,6 @@ export default function SettingsPage() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [newHolidayDate, setNewHolidayDate] = useState("");
-  const [spreadsheetInput, setSpreadsheetInput] = useState("");
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [pendingImportData, setPendingImportData] = useState<unknown>(null);
   const [importProgress, setImportProgress] = useState<{
@@ -69,26 +67,8 @@ export default function SettingsPage() {
     return () => window.removeEventListener("beforeunload", handler);
   }, [importProgress]);
 
-  const { data: settings } = useQuery<{ spreadsheetId: string | null }>({
-    queryKey: ["/api/settings"],
-  });
-
   const { data: holidays } = useQuery<Holiday[]>({
     queryKey: ["/api/holidays"],
-  });
-
-  const updateSettings = useMutation({
-    mutationFn: async (data: { spreadsheetId: string | null }) => {
-      const res = await apiRequest("PATCH", "/api/settings", data);
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
-      toast({ title: "Settings saved" });
-    },
-    onError: () => {
-      toast({ title: "Failed to save settings", variant: "destructive" });
-    },
   });
 
   const addHoliday = useMutation({
@@ -112,21 +92,6 @@ export default function SettingsPage() {
       toast({ title: "Holiday removed" });
     },
   });
-
-  const handleSaveSpreadsheet = () => {
-    let spreadsheetId: string | null = spreadsheetInput.trim();
-    if (!spreadsheetId) {
-      spreadsheetId = null;
-    } else {
-      const match = spreadsheetId.match(
-        /\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/,
-      );
-      if (match) {
-        spreadsheetId = match[1];
-      }
-    }
-    updateSettings.mutate({ spreadsheetId });
-  };
 
   const importData = useMutation({
     mutationFn: async (data: unknown) => {
@@ -261,7 +226,7 @@ export default function SettingsPage() {
             </AlertDialogTitle>
             <AlertDialogDescription>
               This will permanently replace all your current templates, tasks,
-              holidays, and custom streaks with the data from the file. This
+              holidays, custom streaks, and deadlines with the data from the file. This
               cannot be undone. Export your current data first if you want a
               backup.
             </AlertDialogDescription>
@@ -321,60 +286,6 @@ export default function SettingsPage() {
       />
 
       <div className="space-y-6">
-        <Card className="p-4 space-y-3">
-          <div className="flex items-center gap-2 mb-2">
-            <Link2 className="w-4 h-4 text-primary" />
-            <h2 className="text-sm font-medium">
-              Deadlines & Chores Spreadsheet
-            </h2>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            Connect a Google Sheet with columns: Name, Date, Repetition.
-            Matching tasks will be automatically added to each day.
-          </p>
-          <div className="space-y-2">
-            <Label htmlFor="spreadsheet" className="text-xs">
-              Spreadsheet ID or URL
-            </Label>
-            <div className="flex items-center gap-2">
-              <Input
-                id="spreadsheet"
-                value={spreadsheetInput}
-                onChange={(e) => setSpreadsheetInput(e.target.value)}
-                placeholder={
-                  settings?.spreadsheetId ||
-                  "Paste Google Sheets URL or ID..."
-                }
-                className="flex-1 text-sm"
-                data-testid="input-spreadsheet"
-              />
-              <Button
-                size="sm"
-                onClick={handleSaveSpreadsheet}
-                data-testid="button-save-spreadsheet"
-              >
-                Save
-              </Button>
-            </div>
-            {settings?.spreadsheetId && (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground truncate">
-                  Connected: {settings.spreadsheetId}
-                </span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => updateSettings.mutate({ spreadsheetId: null })}
-                  className="h-6 text-xs"
-                  data-testid="button-disconnect-spreadsheet"
-                >
-                  Disconnect
-                </Button>
-              </div>
-            )}
-          </div>
-        </Card>
-
         <Card className="p-4 space-y-3">
           <div className="flex items-center gap-2 mb-2">
             <CalendarClock className="w-4 h-4 text-primary" />
@@ -452,9 +363,9 @@ export default function SettingsPage() {
             <h2 className="text-sm font-medium">Import & Export</h2>
           </div>
           <p className="text-xs text-muted-foreground">
-            Back up your data or transfer it to another account. The export
+            Back up your data or move it to another database. The export
             includes all templates, tasks, holidays, custom streaks, and
-            settings.
+            deadlines.
           </p>
           <div className="flex items-center gap-3 pt-1">
             <Button
