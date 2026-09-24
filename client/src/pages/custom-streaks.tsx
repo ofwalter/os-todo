@@ -1,25 +1,28 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState, useMemo } from "react";
-import { Plus, Trash2, Flame } from "lucide-react";
+import { toast } from "sonner";
+import { Check, Flame, Plus, Trash2, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
-import { useToast } from "@/hooks/use-toast";
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { EmptyState, PageHeader } from "@/components/app-ui";
 import { apiRequest } from "@/lib/queryClient";
+import { computeStreakCount, offsetDateStr, parseDateStr, todayStr } from "@/lib/dates";
 import { cn } from "@/lib/utils";
-import {
-  playCompletionSound,
-  triggerConfetti,
-} from "@/lib/sounds";
+import { playCompletionSound, triggerConfetti } from "@/lib/sounds";
 import type { CustomStreak, CustomStreakEntry } from "@shared/schema";
 
 interface StreakData {
@@ -27,57 +30,7 @@ interface StreakData {
   entries: CustomStreakEntry[];
 }
 
-function getTodayStr(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-function formatDateStr(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-function isWeekendDay(d: Date): boolean {
-  const day = d.getDay();
-  return day === 0 || day === 6;
-}
-
-function computeStreakCount(entries: CustomStreakEntry[], skipWeekends: boolean, holidays?: Set<string>): number {
-  if (entries.length === 0) return 0;
-
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const todayStr = getTodayStr();
-
-  const dateSet = new Set(entries.map((e) => e.date));
-
-  let count = 0;
-  const d = new Date(today);
-
-  if (!dateSet.has(todayStr)) {
-    const isSkippable = skipWeekends && (isWeekendDay(d) || holidays?.has(todayStr));
-    if (!isSkippable) {
-      d.setDate(d.getDate() - 1);
-    }
-  } else {
-    count++;
-    d.setDate(d.getDate() - 1);
-  }
-
-  while (true) {
-    const dateStr = formatDateStr(d);
-    const isSkippable = skipWeekends && (isWeekendDay(d) || holidays?.has(dateStr));
-    if (dateSet.has(dateStr)) {
-      count++;
-      d.setDate(d.getDate() - 1);
-    } else if (isSkippable) {
-      d.setDate(d.getDate() - 1);
-    } else {
-      break;
-    }
-  }
-
-  return count;
-}
+const RECENT_DAYS = 14;
 
 function StreakCard({
   data,
@@ -94,115 +47,134 @@ function StreakCard({
   isCheckingIn: boolean;
   holidays?: Set<string>;
 }) {
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const todayStr = getTodayStr();
-  const checkedInToday = data.entries.some((e) => e.date === todayStr);
-  const streakCount = useMemo(
-    () => computeStreakCount(data.entries, data.streak.skipWeekends, holidays),
-    [data.entries, data.streak.skipWeekends, holidays],
-  );
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [animatingFire, setAnimatingFire] = useState(false);
+  const { streak, entries } = data;
+  const today = todayStr();
+  const checkedInToday = entries.some((e) => e.date === today);
+  const streakCount = useMemo(
+    () => computeStreakCount(entries, streak.skipWeekends, holidays),
+    [entries, streak.skipWeekends, holidays],
+  );
+  const entryDates = useMemo(() => new Set(entries.map((e) => e.date)), [entries]);
+  const recent = useMemo(
+    () => Array.from({ length: RECENT_DAYS }, (_, i) => offsetDateStr(i - (RECENT_DAYS - 1))),
+    [],
+  );
 
   const handleClick = () => {
     if (isCheckingIn) return;
     if (checkedInToday) {
-      onUndo(data.streak.id);
+      onUndo(streak.id);
     } else {
       setAnimatingFire(true);
-      onCheckIn(data.streak.id);
+      onCheckIn(streak.id);
       setTimeout(() => setAnimatingFire(false), 600);
     }
   };
 
   return (
-    <div
-      className="flex flex-col items-center"
-      data-testid={`streak-card-${data.streak.id}`}
-    >
-      <div className="relative group mb-1">
-        <button
-          onClick={handleClick}
-          disabled={isCheckingIn}
-          className={cn(
-            "w-16 h-16 rounded-xl flex flex-col items-center justify-center transition-all duration-200 border-2",
-            checkedInToday
-              ? "bg-emerald-50 dark:bg-emerald-950/40 border-emerald-300 dark:border-emerald-700 shadow-sm"
-              : "bg-card border-border hover:border-primary/40 hover:shadow-md active:scale-95",
-          )}
-          data-testid={`button-checkin-${data.streak.id}`}
+    <div className="surface flex flex-col gap-4 p-4 sm:p-5" data-testid={`streak-card-${streak.id}`}>
+      <div className="flex items-start gap-3">
+        <span
+          aria-hidden
+          className="inline-flex size-11 shrink-0 items-center justify-center rounded-xl bg-muted text-xl leading-none"
         >
-          <span className="text-2xl leading-none">{data.streak.emoji}</span>
-        </button>
-        <button
-          onClick={() => setShowDeleteConfirm(true)}
-          className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-          data-testid={`button-delete-streak-${data.streak.id}`}
+          {streak.emoji}
+        </span>
+        <div className="min-w-0 flex-1 pt-0.5">
+          <p className="truncate text-sm font-medium" data-testid={`text-streak-name-${streak.id}`}>
+            {streak.name}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {streak.skipWeekends ? "Weekdays · holidays off" : "Every day"}
+          </p>
+        </div>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="-mt-1 -mr-1 text-muted-foreground hover:text-destructive"
+          onClick={() => setConfirmDelete(true)}
+          aria-label={`Delete ${streak.name}`}
+          data-testid={`button-delete-streak-${streak.id}`}
         >
-          <Trash2 className="w-3 h-3" />
-        </button>
+          <Trash2 className="size-3.5" />
+        </Button>
       </div>
 
-      <span
-        className="text-[10px] text-muted-foreground text-center leading-tight max-w-[72px] truncate"
-        data-testid={`text-streak-name-${data.streak.id}`}
-      >
-        {data.streak.name}
-      </span>
-
-      {streakCount > 0 && (
-        <div className="flex items-center gap-0.5 mt-1 flex-wrap justify-center max-w-[80px]">
-          {Array.from({ length: Math.min(streakCount, 30) }).map((_, i) => (
-            <Flame
-              key={i}
-              className={cn(
-                "w-3 h-3 text-orange-500",
-                i === 0 && animatingFire && "animate-bounce",
-              )}
-              style={{
-                animationDelay: i === 0 && animatingFire ? "0ms" : undefined,
-                animationDuration: i === 0 && animatingFire ? "500ms" : undefined,
-              }}
-            />
-          ))}
-          {streakCount > 30 && (
-            <span className="text-[9px] text-orange-500 font-bold">+{streakCount - 30}</span>
-          )}
+      <div className="flex items-end justify-between gap-3">
+        <div className="flex items-baseline gap-1.5">
+          <Flame
+            className={cn(
+              "size-5 self-center",
+              streakCount > 0 ? "text-chart-2" : "text-muted-foreground/40",
+              animatingFire && "animate-bounce",
+            )}
+          />
+          <span className="num text-3xl leading-none font-semibold" data-testid={`text-streak-count-${streak.id}`}>
+            {streakCount}
+          </span>
+          <span className="text-xs text-muted-foreground">day{streakCount === 1 ? "" : "s"}</span>
         </div>
-      )}
+        <Button
+          variant="outline"
+          onClick={handleClick}
+          disabled={isCheckingIn}
+          aria-pressed={checkedInToday}
+          className={cn(
+            checkedInToday &&
+              "border-brand/40 bg-brand/10 text-brand hover:bg-brand/15 hover:text-brand dark:border-brand/40 dark:bg-brand/10",
+          )}
+          data-testid={`button-checkin-${streak.id}`}
+        >
+          <Check />
+          {checkedInToday ? "Done today" : "Check in"}
+        </Button>
+      </div>
 
-      {showDeleteConfirm && (
-        <Dialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
-          <DialogContent className="sm:max-w-sm">
-            <DialogHeader>
-              <DialogTitle>Delete "{data.streak.name}"?</DialogTitle>
-            </DialogHeader>
-            <p className="text-sm text-muted-foreground">
-              This will permanently delete this streak and all its history.
-            </p>
-            <div className="flex justify-end gap-2 mt-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setShowDeleteConfirm(false)}
-                data-testid="button-cancel-delete"
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="destructive"
-                size="sm"
-                onClick={() => {
-                  onDelete(data.streak.id);
-                  setShowDeleteConfirm(false);
-                }}
-                data-testid="button-confirm-delete"
-              >
-                Delete
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
-      )}
+      <div>
+        <div className="flex gap-1" aria-label={`Last ${RECENT_DAYS} days`}>
+          {recent.map((date) => {
+            const d = parseDateStr(date);
+            const off = streak.skipWeekends && (d.getDay() === 0 || d.getDay() === 6 || !!holidays?.has(date));
+            const done = entryDates.has(date);
+            return (
+              <span
+                key={date}
+                title={`${date}: ${done ? "done" : off ? "off day" : "missed"}`}
+                className={cn(
+                  "h-2 flex-1 rounded-full",
+                  done ? "bg-positive" : off ? "bg-muted/60" : "bg-muted",
+                  date === today && !done && "ring-1 ring-foreground/30 ring-inset",
+                )}
+              />
+            );
+          })}
+        </div>
+        <div className="mt-1.5 flex justify-between text-[0.6875rem] text-muted-foreground">
+          <span>{RECENT_DAYS - 1} days ago</span>
+          <span>Today</span>
+        </div>
+      </div>
+
+      <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete “{streak.name}”?</AlertDialogTitle>
+            <AlertDialogDescription>This permanently deletes the streak and all of its history.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-delete">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => onDelete(streak.id)}
+              data-testid="button-confirm-delete"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -213,7 +185,6 @@ export default function CustomStreaksPage() {
   const [newSkipWeekends, setNewSkipWeekends] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const queryClient = useQueryClient();
-  const { toast } = useToast();
 
   const { data: streakData, isLoading } = useQuery<StreakData[]>({
     queryKey: ["/api/custom-streaks"],
@@ -223,10 +194,7 @@ export default function CustomStreaksPage() {
     queryKey: ["/api/holidays"],
   });
 
-  const holidaySet = useMemo(() => {
-    if (!holidayList) return new Set<string>();
-    return new Set(holidayList.map((h) => h.date));
-  }, [holidayList]);
+  const holidaySet = useMemo(() => new Set(holidayList?.map((h) => h.date)), [holidayList]);
 
   const createStreak = useMutation({
     mutationFn: async ({ name, emoji, skipWeekends }: { name: string; emoji: string; skipWeekends: boolean }) => {
@@ -240,12 +208,8 @@ export default function CustomStreaksPage() {
       setNewSkipWeekends(false);
       setDialogOpen(false);
     },
-    onError: (error: any) => {
-      toast({
-        title: "Failed to create streak",
-        description: error.message,
-        variant: "destructive",
-      });
+    onError: (error: Error) => {
+      toast.error("Failed to create streak", { description: error.message });
     },
   });
 
@@ -261,33 +225,27 @@ export default function CustomStreaksPage() {
 
   const checkIn = useMutation({
     mutationFn: async (id: number) => {
-      const res = await apiRequest("POST", `/api/custom-streaks/${id}/check-in`, { date: getTodayStr() });
+      const res = await apiRequest("POST", `/api/custom-streaks/${id}/check-in`, { date: todayStr() });
       return res.json();
     },
     onMutate: async (id) => {
       await queryClient.cancelQueries({ queryKey: ["/api/custom-streaks"] });
       const previous = queryClient.getQueryData<StreakData[]>(["/api/custom-streaks"]);
       if (previous) {
-        const todayStr = getTodayStr();
-        const updated = previous.map((sd) => {
-          if (sd.streak.id === id) {
-            return {
-              ...sd,
-              entries: [{ id: -1, streakId: id, date: todayStr }, ...sd.entries],
-            };
-          }
-          return sd;
-        });
-        queryClient.setQueryData(["/api/custom-streaks"], updated);
+        const today = todayStr();
+        queryClient.setQueryData(
+          ["/api/custom-streaks"],
+          previous.map((sd) =>
+            sd.streak.id === id ? { ...sd, entries: [{ id: -1, streakId: id, date: today }, ...sd.entries] } : sd,
+          ),
+        );
       }
       playCompletionSound();
       triggerConfetti();
       return { previous };
     },
     onError: (_err, _id, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(["/api/custom-streaks"], context.previous);
-      }
+      if (context?.previous) queryClient.setQueryData(["/api/custom-streaks"], context.previous);
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/custom-streaks"] });
@@ -296,144 +254,75 @@ export default function CustomStreaksPage() {
 
   const undoCheckIn = useMutation({
     mutationFn: async (id: number) => {
-      const res = await apiRequest("DELETE", `/api/custom-streaks/${id}/check-in`, { date: getTodayStr() });
+      const res = await apiRequest("DELETE", `/api/custom-streaks/${id}/check-in`, { date: todayStr() });
       return res.json();
     },
     onMutate: async (id) => {
       await queryClient.cancelQueries({ queryKey: ["/api/custom-streaks"] });
       const previous = queryClient.getQueryData<StreakData[]>(["/api/custom-streaks"]);
       if (previous) {
-        const todayStr = getTodayStr();
-        const updated = previous.map((sd) => {
-          if (sd.streak.id === id) {
-            return {
-              ...sd,
-              entries: sd.entries.filter((e) => e.date !== todayStr),
-            };
-          }
-          return sd;
-        });
-        queryClient.setQueryData(["/api/custom-streaks"], updated);
+        const today = todayStr();
+        queryClient.setQueryData(
+          ["/api/custom-streaks"],
+          previous.map((sd) =>
+            sd.streak.id === id ? { ...sd, entries: sd.entries.filter((e) => e.date !== today) } : sd,
+          ),
+        );
       }
       return { previous };
     },
     onError: (_err, _id, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(["/api/custom-streaks"], context.previous);
-      }
+      if (context?.previous) queryClient.setQueryData(["/api/custom-streaks"], context.previous);
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/custom-streaks"] });
     },
   });
 
+  const canCreate = newName.trim() !== "" && newEmoji.trim() !== "" && !createStreak.isPending;
   const handleCreate = () => {
-    if (!newName.trim() || !newEmoji.trim()) return;
+    if (!canCreate) return;
     createStreak.mutate({ name: newName.trim(), emoji: newEmoji.trim(), skipWeekends: newSkipWeekends });
   };
 
-  if (isLoading) {
-    return (
-      <div className="p-6 max-w-3xl mx-auto space-y-4">
-        <Skeleton className="h-8 w-48" />
-        <div className="flex flex-wrap gap-4">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <Skeleton key={i} className="w-16 h-24" />
-          ))}
-        </div>
-      </div>
-    );
-  }
+  const addButton = (
+    <Button onClick={() => setDialogOpen(true)} data-testid="button-add-streak">
+      <Plus />
+      New streak
+    </Button>
+  );
 
   return (
-    <div className="p-4 sm:p-6 max-w-3xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1
-            className="text-lg font-semibold tracking-tight"
-            data-testid="text-custom-streaks-title"
-          >
-            Custom Streaks
-          </h1>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Track daily habits with a single tap
-          </p>
+    <div>
+      <PageHeader
+        title="Streaks"
+        titleTestId="text-custom-streaks-title"
+        description="Habits you check off once a day, with a running count."
+        actions={addButton}
+      />
+
+      {isLoading ? (
+        <div className="grid gap-3 sm:grid-cols-2 sm:gap-4 xl:grid-cols-3" aria-busy aria-label="Loading">
+          {Array.from({ length: 3 }, (_, i) => (
+            <Skeleton key={i} className="h-48 rounded-2xl" />
+          ))}
         </div>
-
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogTrigger asChild>
-            <Button size="sm" data-testid="button-add-streak">
-              <Plus className="w-4 h-4 mr-1" />
-              Add Streak
-            </Button>
-          </DialogTrigger>
-          <DialogContent className="sm:max-w-sm">
-            <DialogHeader>
-              <DialogTitle>New Custom Streak</DialogTitle>
-            </DialogHeader>
-            <div className="space-y-3 mt-2">
-              <div>
-                <label className="text-xs font-medium text-muted-foreground mb-1 block">
-                  Emoji
-                </label>
-                <Input
-                  value={newEmoji}
-                  onChange={(e) => setNewEmoji(e.target.value)}
-                  placeholder="e.g. 💪"
-                  className="text-xl"
-                  maxLength={4}
-                  data-testid="input-streak-emoji"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground mb-1 block">
-                  Name
-                </label>
-                <Input
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  placeholder="e.g. Exercise"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleCreate();
-                  }}
-                  data-testid="input-streak-name"
-                />
-              </div>
-              <div className="flex items-center justify-between">
-                <Label htmlFor="skip-weekends" className="text-xs font-medium text-muted-foreground cursor-pointer">
-                  Weekends/holidays don't break streak
-                </Label>
-                <Switch
-                  id="skip-weekends"
-                  checked={newSkipWeekends}
-                  onCheckedChange={setNewSkipWeekends}
-                  data-testid="switch-skip-weekends"
-                />
-              </div>
-              <Button
-                onClick={handleCreate}
-                disabled={!newName.trim() || !newEmoji.trim() || createStreak.isPending}
-                className="w-full"
-                data-testid="button-create-streak"
-              >
-                Create
+      ) : !streakData || streakData.length === 0 ? (
+        <div className="surface">
+          <EmptyState
+            icon={Zap}
+            title="No streaks yet"
+            description="Add a habit like “Exercise” or “Read” and check in each day to keep it going."
+            action={
+              <Button variant="outline" size="sm" onClick={() => setDialogOpen(true)}>
+                <Plus />
+                New streak
               </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
-      </div>
-
-      {(!streakData || streakData.length === 0) ? (
-        <div className="text-center py-12 text-muted-foreground">
-          <Flame className="w-10 h-10 mx-auto mb-3 opacity-30" />
-          <p className="text-sm">No custom streaks yet</p>
-          <p className="text-xs mt-1">Add one to start tracking daily habits</p>
+            }
+          />
         </div>
       ) : (
-        <div
-          className="flex flex-wrap gap-4"
-          data-testid="streak-grid"
-        >
+        <div className="grid gap-3 sm:grid-cols-2 sm:gap-4 xl:grid-cols-3" data-testid="streak-grid">
           {streakData.map((sd) => (
             <StreakCard
               key={sd.streak.id}
@@ -447,6 +336,67 @@ export default function CustomStreaksPage() {
           ))}
         </div>
       )}
+
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>New streak</DialogTitle>
+            <DialogDescription>Pick an emoji and a name. You can check in once per day.</DialogDescription>
+          </DialogHeader>
+          <form
+            className="space-y-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleCreate();
+            }}
+          >
+            <div className="grid grid-cols-[4.5rem_1fr] gap-3">
+              <div className="space-y-2">
+                <Label htmlFor="streak-emoji">Emoji</Label>
+                <Input
+                  id="streak-emoji"
+                  value={newEmoji}
+                  onChange={(e) => setNewEmoji(e.target.value)}
+                  placeholder="💪"
+                  className="h-9 text-center text-lg"
+                  maxLength={4}
+                  data-testid="input-streak-emoji"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="streak-name">Name</Label>
+                <Input
+                  id="streak-name"
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  placeholder="Exercise"
+                  className="h-9"
+                  data-testid="input-streak-name"
+                />
+              </div>
+            </div>
+            <div className="flex items-center justify-between gap-4 rounded-xl bg-muted/50 px-3 py-2.5">
+              <Label htmlFor="skip-weekends" className="cursor-pointer text-sm font-normal text-foreground">
+                Weekends and holidays don't break it
+              </Label>
+              <Switch
+                id="skip-weekends"
+                checked={newSkipWeekends}
+                onCheckedChange={setNewSkipWeekends}
+                data-testid="switch-skip-weekends"
+              />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={!canCreate} data-testid="button-create-streak">
+                Create streak
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

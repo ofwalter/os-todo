@@ -77,7 +77,7 @@ export function triggerConfetti() {
     particleCount: 80,
     spread: 60,
     origin: { y: 0.7 },
-    colors: ["#10B981", "#3B82F6", "#F59E0B", "#8B5CF6", "#EC4899"],
+    colors: ["#5b4ff0", "#eb6834", "#1baf7a", "#eda100", "#e87ba4"], // chart-1…5
     ticks: 150,
     gravity: 1.2,
     scalar: 0.9,

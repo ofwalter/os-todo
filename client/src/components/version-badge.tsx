@@ -1,3 +1,5 @@
+import { cn } from "@/lib/utils";
+
 /**
  * Tiny build version badge fixed to the bottom-right of the viewport.
  * The version string comes from package.json, injected at build time via Vite's
@@ -17,10 +19,13 @@
  * every production deploy so the badge always changes; the user relies on the
  * badge to verify which build their tab is showing.
  */
-export function VersionBadge() {
+export function VersionBadge({ className }: { className?: string }) {
   return (
     <div
-      className="fixed bottom-1.5 right-2 z-50 pointer-events-none select-none text-[10px] leading-none text-muted-foreground/70 tabular-nums"
+      className={cn(
+        "pointer-events-none fixed right-2 bottom-1.5 z-50 font-mono text-[10px] leading-none text-muted-foreground/60 tabular-nums select-none",
+        className,
+      )}
       data-testid="version-badge"
       aria-label={`App version ${__APP_VERSION__}`}
     >

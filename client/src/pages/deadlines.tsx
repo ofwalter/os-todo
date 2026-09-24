@@ -1,27 +1,16 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Pencil, Trash2, Repeat, FolderTree, CalendarClock } from "lucide-react";
+import { toast } from "sonner";
+import { CalendarCheck2, CalendarClock, ChevronDown, FolderTree, Pencil, Plus, Repeat, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { EmptyState, PageHeader, StatusChip } from "@/components/app-ui";
 import { apiRequest } from "@/lib/queryClient";
-import { useToast } from "@/hooks/use-toast";
+import { daysFromToday, parseDateStr, todayStr } from "@/lib/dates";
 import { cn } from "@/lib/utils";
 import type { Deadline } from "@shared/schema";
 
@@ -36,32 +25,20 @@ const REPEAT_PRESETS: { value: string; label: string; days: number | null }[] = 
   { value: "custom", label: "Every N days…", days: null },
 ];
 
-function getTodayStr(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-function daysBetween(from: string, to: string): number {
-  const a = new Date(from + "T00:00:00").getTime();
-  const b = new Date(to + "T00:00:00").getTime();
-  return Math.round((b - a) / (1000 * 60 * 60 * 24));
-}
-
 function repeatLabel(days: number | null): string | null {
   if (!days) return null;
   const preset = REPEAT_PRESETS.find((p) => p.days === days);
   return preset ? preset.label : `Every ${days} days`;
 }
 
-function dueLabel(dueDate: string, today: string): string {
-  const diff = daysBetween(today, dueDate);
+function dueLabel(dueDate: string): string {
+  const diff = daysFromToday(dueDate);
   if (diff === 0) return "Today";
   if (diff === 1) return "Tomorrow";
   if (diff === -1) return "Yesterday";
   if (diff < 0) return `${-diff} days overdue`;
   if (diff < 7) return `In ${diff} days`;
-  return new Date(dueDate + "T00:00:00").toLocaleDateString("en-US", {
-    weekday: "short",
+  return parseDateStr(dueDate).toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
     year: diff > 300 ? "numeric" : undefined,
@@ -78,7 +55,7 @@ interface FormState {
 
 function toForm(d?: Deadline): FormState {
   if (!d) {
-    return { name: "", dueDate: getTodayStr(), repeat: "none", customDays: "", bucket: "" };
+    return { name: "", dueDate: todayStr(), repeat: "none", customDays: "", bucket: "" };
   }
   const preset = REPEAT_PRESETS.find((p) => p.days !== null && p.days === d.repeatDays);
   return {
@@ -110,63 +87,106 @@ function DeadlineRow({
   onDelete: () => void;
 }) {
   const overdue = !deadline.isDone && deadline.dueDate < today;
+  const dueToday = !deadline.isDone && deadline.dueDate === today;
   const repeat = repeatLabel(deadline.repeatDays);
+  const Icon = deadline.isDone ? CalendarCheck2 : repeat ? Repeat : CalendarClock;
 
   return (
-    <div
-      className="flex items-center gap-3 py-2 px-2 rounded-md hover:bg-accent/50 group"
+    <li
+      className={cn(
+        "group grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 px-4 py-3 transition-colors hover:bg-muted/40 md:px-5",
+        deadline.isDone && "opacity-55",
+      )}
       data-testid={`deadline-row-${deadline.id}`}
     >
-      <div className="flex-1 min-w-0">
-        <p className={cn("text-sm truncate", deadline.isDone && "line-through text-muted-foreground")}>
-          {deadline.name}
-        </p>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-          <span className={cn(overdue && "text-destructive font-medium")}>
-            {deadline.isDone ? "Done" : dueLabel(deadline.dueDate, today)}
-          </span>
-          {repeat && (
-            <span className="flex items-center gap-1">
-              <Repeat className="w-3 h-3" />
+      <span
+        aria-hidden
+        className={cn(
+          "inline-flex size-9 items-center justify-center rounded-xl [&_svg]:size-[1.05rem]",
+          overdue ? "bg-negative/12 text-negative" : deadline.isDone ? "bg-muted text-muted-foreground" : "bg-brand/10 text-brand",
+        )}
+      >
+        <Icon />
+      </span>
+
+      <div className="min-w-0">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <p className={cn("truncate text-sm font-medium", deadline.isDone && "line-through")}>{deadline.name}</p>
+          {dueToday && <StatusChip tone="brand">Today</StatusChip>}
+        </div>
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+          {repeat ? (
+            <span className="inline-flex items-center gap-1">
+              <Repeat className="size-3" />
               {repeat}
             </span>
+          ) : (
+            <span>One-off</span>
           )}
           {deadline.bucket && (
-            <span className="flex items-center gap-1">
-              <FolderTree className="w-3 h-3" />
+            <span className="inline-flex items-center gap-1">
+              <FolderTree className="size-3" />
               {deadline.bucket}
             </span>
           )}
         </div>
       </div>
-      <Button
-        size="icon"
-        variant="ghost"
-        className="h-7 w-7 sm:opacity-0 sm:group-hover:opacity-100"
-        onClick={onEdit}
-        aria-label="Edit"
-        data-testid={`button-edit-deadline-${deadline.id}`}
-      >
-        <Pencil className="w-3.5 h-3.5 text-muted-foreground" />
-      </Button>
-      <Button
-        size="icon"
-        variant="ghost"
-        className="h-7 w-7 sm:opacity-0 sm:group-hover:opacity-100"
-        onClick={onDelete}
-        aria-label="Delete"
-        data-testid={`button-delete-deadline-${deadline.id}`}
-      >
-        <Trash2 className="w-3.5 h-3.5 text-destructive" />
-      </Button>
+
+      <div className="flex items-center gap-1">
+        <div className="mr-1 text-right">
+          <p
+            className={cn(
+              "text-xs font-medium whitespace-nowrap tabular-nums",
+              overdue ? "text-negative" : "text-foreground",
+            )}
+          >
+            {deadline.isDone ? "Done" : dueLabel(deadline.dueDate)}
+          </p>
+          {!deadline.isDone && daysFromToday(deadline.dueDate) >= 7 && (
+            <p className="text-[0.6875rem] text-muted-foreground">
+              {parseDateStr(deadline.dueDate).toLocaleDateString("en-US", { weekday: "short" })}
+            </p>
+          )}
+        </div>
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          className="text-muted-foreground sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
+          onClick={onEdit}
+          aria-label={`Edit ${deadline.name}`}
+          data-testid={`button-edit-deadline-${deadline.id}`}
+        >
+          <Pencil className="size-3.5" />
+        </Button>
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          className="text-muted-foreground hover:text-destructive sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
+          onClick={onDelete}
+          aria-label={`Delete ${deadline.name}`}
+          data-testid={`button-delete-deadline-${deadline.id}`}
+        >
+          <Trash2 className="size-3.5" />
+        </Button>
+      </div>
+    </li>
+  );
+}
+
+function GroupHeader({ title, count, tone }: { title: string; count: number; tone?: "negative" }) {
+  return (
+    <div className="sticky top-14 z-10 flex items-center justify-between border-b bg-card/95 px-4 py-2 backdrop-blur md:px-5 lg:top-0">
+      <span className={cn("text-xs font-semibold", tone === "negative" ? "text-negative" : "text-foreground")}>
+        {title}
+      </span>
+      <span className="text-xs text-muted-foreground tabular-nums">{count}</span>
     </div>
   );
 }
 
 export default function DeadlinesPage() {
   const queryClient = useQueryClient();
-  const { toast } = useToast();
-  const today = getTodayStr();
+  const today = todayStr();
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Deadline | null>(null);
@@ -201,10 +221,10 @@ export default function DeadlinesPage() {
     onSuccess: () => {
       invalidate();
       setDialogOpen(false);
-      toast({ title: editing ? "Deadline updated" : "Deadline added" });
+      toast.success(editing ? "Deadline updated" : "Deadline added");
     },
     onError: (err: Error) => {
-      toast({ title: "Failed to save deadline", description: err.message, variant: "destructive" });
+      toast.error("Failed to save deadline", { description: err.message });
     },
   });
 
@@ -214,7 +234,7 @@ export default function DeadlinesPage() {
     },
     onSuccess: () => {
       invalidate();
-      toast({ title: "Deadline deleted" });
+      toast.success("Deadline deleted");
     },
   });
 
@@ -230,92 +250,123 @@ export default function DeadlinesPage() {
     setDialogOpen(true);
   };
 
-  const active = (deadlines ?? []).filter((d) => !d.isDone);
+  const byDue = (a: Deadline, b: Deadline) => a.dueDate.localeCompare(b.dueDate);
+  const active = (deadlines ?? []).filter((d) => !d.isDone).sort(byDue);
   const overdue = active.filter((d) => d.dueDate < today);
-  const upcoming = active.filter((d) => d.dueDate >= today);
-  const done = (deadlines ?? []).filter((d) => d.isDone);
+  const thisWeek = active.filter((d) => d.dueDate >= today && daysFromToday(d.dueDate) < 7);
+  const later = active.filter((d) => daysFromToday(d.dueDate) >= 7);
+  const done = (deadlines ?? []).filter((d) => d.isDone).sort(byDue);
 
   const canSave =
-    form.name.trim() !== "" &&
-    form.dueDate !== "" &&
-    (form.repeat !== "custom" || formRepeatDays(form) !== null);
+    form.name.trim() !== "" && form.dueDate !== "" && (form.repeat !== "custom" || formRepeatDays(form) !== null);
 
-  const renderRows = (list: Deadline[]) =>
-    list.map((d) => (
-      <DeadlineRow
-        key={d.id}
-        deadline={d}
-        today={today}
-        onEdit={() => openEdit(d)}
-        onDelete={() => remove.mutate(d.id)}
-      />
-    ));
+  const renderRows = (list: Deadline[]) => (
+    <ul className="divide-y">
+      {list.map((d) => (
+        <DeadlineRow key={d.id} deadline={d} today={today} onEdit={() => openEdit(d)} onDelete={() => remove.mutate(d.id)} />
+      ))}
+    </ul>
+  );
+
+  const stat = (label: string, value: number, tone?: string) => (
+    <div className="surface px-3 py-2.5 sm:px-4">
+      <p className="text-[0.6875rem] font-medium text-muted-foreground">{label}</p>
+      <p className={cn("num mt-0.5 truncate text-sm font-semibold sm:text-base", tone)}>{value}</p>
+    </div>
+  );
 
   return (
-    <div className="p-4 sm:p-6 max-w-2xl mx-auto">
-      <div className="flex items-center justify-between mb-6 gap-4">
-        <div>
-          <h1 className="text-lg font-semibold tracking-tight" data-testid="text-deadlines-title">
-            Deadlines & Chores
-          </h1>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Each one shows up as a task on the day it's due
-          </p>
-        </div>
-        <Button size="sm" onClick={openNew} data-testid="button-add-deadline">
-          <Plus className="w-4 h-4 mr-1" />
-          Add
-        </Button>
-      </div>
+    <div className="mx-auto max-w-4xl">
+      <PageHeader
+        title="Deadlines"
+        titleTestId="text-deadlines-title"
+        description="Chores and due dates. Each one appears as a task on the day it's due."
+        actions={
+          <Button onClick={openNew} data-testid="button-add-deadline">
+            <Plus />
+            New deadline
+          </Button>
+        }
+      />
 
       {isLoading ? (
-        <div className="space-y-2">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-12 w-full" />
-          ))}
+        <div aria-busy aria-label="Loading">
+          <div className="mb-4 grid grid-cols-3 gap-3 sm:mb-6">
+            {Array.from({ length: 3 }, (_, i) => (
+              <Skeleton key={i} className="h-16 rounded-2xl" />
+            ))}
+          </div>
+          <Skeleton className="h-80 rounded-2xl" />
         </div>
       ) : (
-        <div className="space-y-6">
-          {overdue.length > 0 && (
-            <Card className="p-3 border-destructive/40">
-              <h2 className="text-xs font-medium text-destructive px-2 mb-1">
-                Overdue: missed on their due day
-              </h2>
-              {renderRows(overdue)}
-            </Card>
-          )}
+        <>
+          <div className="mb-4 grid grid-cols-3 gap-3 sm:mb-6 sm:gap-4">
+            {stat("Overdue", overdue.length, overdue.length ? "text-negative" : undefined)}
+            {stat("Next 7 days", thisWeek.length)}
+            {stat("Recurring", active.filter((d) => d.repeatDays).length)}
+          </div>
 
-          <Card className="p-3">
-            <h2 className="text-xs font-medium text-muted-foreground px-2 mb-1">Upcoming</h2>
-            {upcoming.length > 0 ? (
-              renderRows(upcoming)
+          <div className="surface overflow-clip">
+            {active.length === 0 ? (
+              <EmptyState
+                icon={CalendarClock}
+                testId="empty-deadlines"
+                title="No upcoming deadlines"
+                description="Add bills, chores, or anything with a due date. It shows up on your list that day."
+                action={
+                  <Button variant="outline" size="sm" onClick={openNew}>
+                    <Plus />
+                    New deadline
+                  </Button>
+                }
+              />
             ) : (
-              <div className="flex flex-col items-center gap-2 py-8 text-center" data-testid="empty-deadlines">
-                <CalendarClock className="w-6 h-6 text-muted-foreground" />
-                <p className="text-sm text-muted-foreground">No upcoming deadlines</p>
-              </div>
+              <>
+                {overdue.length > 0 && (
+                  <section>
+                    <GroupHeader title="Overdue: missed on their due day" count={overdue.length} tone="negative" />
+                    {renderRows(overdue)}
+                  </section>
+                )}
+                {thisWeek.length > 0 && (
+                  <section className={cn(overdue.length > 0 && "border-t")}>
+                    <GroupHeader title="Next 7 days" count={thisWeek.length} />
+                    {renderRows(thisWeek)}
+                  </section>
+                )}
+                {later.length > 0 && (
+                  <section className={cn((overdue.length > 0 || thisWeek.length > 0) && "border-t")}>
+                    <GroupHeader title="Later" count={later.length} />
+                    {renderRows(later)}
+                  </section>
+                )}
+              </>
             )}
-          </Card>
+          </div>
 
           {done.length > 0 && (
-            <div>
+            <div className="mt-4 sm:mt-6">
               <button
-                className="text-xs text-muted-foreground hover:text-foreground px-2"
+                type="button"
+                className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
                 onClick={() => setShowDone((v) => !v)}
+                aria-expanded={showDone}
                 data-testid="button-toggle-done"
               >
-                {showDone ? "Hide" : "Show"} completed one-offs ({done.length})
+                <ChevronDown className={cn("size-3.5 transition-transform", !showDone && "-rotate-90")} />
+                Completed one-offs ({done.length})
               </button>
-              {showDone && <Card className="p-3 mt-2">{renderRows(done)}</Card>}
+              {showDone && <div className="surface mt-3 overflow-clip">{renderRows(done)}</div>}
             </div>
           )}
-        </div>
+        </>
       )}
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle>{editing ? "Edit deadline" : "New deadline"}</DialogTitle>
+            <DialogDescription>It'll appear as a task on the day it's due.</DialogDescription>
           </DialogHeader>
           <form
             className="space-y-4"
@@ -324,34 +375,34 @@ export default function DeadlinesPage() {
               if (canSave) save.mutate();
             }}
           >
-            <div className="space-y-1.5">
-              <Label htmlFor="deadline-name" className="text-xs">Name</Label>
+            <div className="space-y-2">
+              <Label htmlFor="deadline-name">Name</Label>
               <Input
                 id="deadline-name"
                 autoFocus
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
                 placeholder="Pay rent"
+                className="h-9"
                 data-testid="input-deadline-name"
               />
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="deadline-date" className="text-xs">
-                {editing ? "Next due" : "First due"}
-              </Label>
-              <Input
-                id="deadline-date"
-                type="date"
-                value={form.dueDate}
-                onChange={(e) => setForm({ ...form, dueDate: e.target.value })}
-                data-testid="input-deadline-date"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">Repeat</Label>
-              <div className="flex gap-2">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label htmlFor="deadline-date">{editing ? "Next due" : "First due"}</Label>
+                <Input
+                  id="deadline-date"
+                  type="date"
+                  value={form.dueDate}
+                  onChange={(e) => setForm({ ...form, dueDate: e.target.value })}
+                  className="h-9"
+                  data-testid="input-deadline-date"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Repeat</Label>
                 <Select value={form.repeat} onValueChange={(v) => setForm({ ...form, repeat: v })}>
-                  <SelectTrigger className="flex-1" data-testid="select-deadline-repeat">
+                  <SelectTrigger className="h-9" data-testid="select-deadline-repeat">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -362,33 +413,46 @@ export default function DeadlinesPage() {
                     ))}
                   </SelectContent>
                 </Select>
-                {form.repeat === "custom" && (
-                  <Input
-                    type="number"
-                    min={1}
-                    className="w-20"
-                    value={form.customDays}
-                    onChange={(e) => setForm({ ...form, customDays: e.target.value })}
-                    placeholder="Days"
-                    data-testid="input-deadline-custom-days"
-                  />
-                )}
               </div>
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="deadline-bucket" className="text-xs">Group under (optional)</Label>
+            {form.repeat === "custom" && (
+              <div className="space-y-2">
+                <Label htmlFor="deadline-custom-days">Repeat every</Label>
+                <div className="relative">
+                  <Input
+                    id="deadline-custom-days"
+                    type="number"
+                    min={1}
+                    value={form.customDays}
+                    onChange={(e) => setForm({ ...form, customDays: e.target.value })}
+                    placeholder="10"
+                    className="h-9 pr-12 tabular-nums"
+                    data-testid="input-deadline-custom-days"
+                  />
+                  <span className="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-xs text-muted-foreground">
+                    days
+                  </span>
+                </div>
+              </div>
+            )}
+            <div className="space-y-2">
+              <Label htmlFor="deadline-bucket">Group under (optional)</Label>
               <Input
                 id="deadline-bucket"
                 value={form.bucket}
                 onChange={(e) => setForm({ ...form, bucket: e.target.value })}
-                placeholder="e.g. Home"
+                placeholder="Home"
+                className="h-9"
                 data-testid="input-deadline-bucket"
               />
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 Nests it under that day's task with this exact title, if there is one.
               </p>
             </div>
             <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
+                Cancel
+              </Button>
               <Button type="submit" disabled={!canSave || save.isPending} data-testid="button-save-deadline">
                 {save.isPending ? "Saving…" : "Save"}
               </Button>

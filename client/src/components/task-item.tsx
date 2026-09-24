@@ -1,9 +1,8 @@
-import { useState, useRef } from "react";
+import { useState } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
   ChevronRight,
-  ChevronDown,
   GripVertical,
   Check,
   SkipForward,
@@ -12,22 +11,18 @@ import {
   ShieldCheck,
   Clock,
   Plus,
+  CalendarClock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { StatusChip } from "@/components/app-ui";
 import { cn } from "@/lib/utils";
 import type { DailyTask, TaskStatus } from "@shared/schema";
-import {
-  playCompletionSound,
-  playSkipSound,
-  triggerConfetti,
-  showFrownyFace,
-} from "@/lib/sounds";
+import { playCompletionSound, playSkipSound, triggerConfetti, showFrownyFace } from "@/lib/sounds";
+
+/** Horizontal space per nesting level, in px. */
+export const INDENT = 22;
 
 interface TaskItemProps {
   task: DailyTask;
@@ -47,28 +42,76 @@ interface TaskItemProps {
   isHiddenDuringDrag?: boolean;
 }
 
+const DEADLINE_PREFIX = "[Deadline] ";
+
+function displayTitle(task: DailyTask): string {
+  return task.deadlineName && task.title.startsWith(DEADLINE_PREFIX)
+    ? task.title.slice(DEADLINE_PREFIX.length)
+    : task.title;
+}
+
 function renderTitle(title: string) {
   const urlRegex = /(https?:\/\/[^\s]+)/g;
-  const parts = title.split(urlRegex);
+  return title.split(urlRegex).map((part, i) =>
+    /^https?:\/\//.test(part) ? (
+      <a
+        key={i}
+        href={part}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-brand underline decoration-brand/40 underline-offset-2 hover:decoration-brand"
+        data-testid={`link-task-url-${i}`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {part}
+      </a>
+    ) : (
+      <span key={i}>{part}</span>
+    ),
+  );
+}
 
-  return parts.map((part, i) => {
-    if (part.match(/^https?:\/\//)) {
+/** The square status box at the start of every row. */
+export function StatusBox({ task, isDeadline }: { task: DailyTask; isDeadline?: boolean }) {
+  const base = "flex size-[1.125rem] items-center justify-center rounded-[5px] transition-colors";
+  if (task.isExempt) {
+    return (
+      <span className={cn(base, "bg-muted text-muted-foreground")}>
+        <ShieldCheck className="size-3" strokeWidth={2.5} />
+      </span>
+    );
+  }
+  switch (task.status) {
+    case "complete":
       return (
-        <a
-          key={i}
-          href={part}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-primary underline decoration-primary/40 hover:decoration-primary"
-          data-testid={`link-task-url-${i}`}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {part}
-        </a>
+        <span className={cn(base, "bg-brand text-brand-foreground")}>
+          <Check className="size-3" strokeWidth={3.25} />
+        </span>
       );
-    }
-    return <span key={i}>{part}</span>;
-  });
+    case "skipped":
+      return (
+        <span className={cn(base, "bg-warning/15 text-amber-700 dark:text-warning")}>
+          {isDeadline ? <Clock className="size-3" strokeWidth={2.5} /> : <SkipForward className="size-3" strokeWidth={2.5} />}
+        </span>
+      );
+    case "partial":
+      return (
+        <span className={cn(base, "relative overflow-hidden text-brand-foreground")}>
+          <span className="absolute inset-0 bg-brand" style={{ clipPath: "polygon(0 0, 100% 0, 0 100%)" }} />
+          <span className="absolute inset-0 bg-warning" style={{ clipPath: "polygon(100% 0, 100% 100%, 0 100%)" }} />
+          <Check className="relative size-3" strokeWidth={3.25} />
+        </span>
+      );
+    default:
+      return (
+        <span
+          className={cn(
+            base,
+            "border-[1.5px] border-muted-foreground/35 bg-card group-hover/status:border-brand group-hover/status:bg-brand/10",
+          )}
+        />
+      );
+  }
 }
 
 export function TaskItem({
@@ -88,63 +131,40 @@ export function TaskItem({
   isDndEnabled = false,
   isHiddenDuringDrag = false,
 }: TaskItemProps) {
+  // Hover state doubles as "tapped" on touch screens, where rows have no hover.
   const [isHovered, setIsHovered] = useState(false);
   const [putOffOpen, setPutOffOpen] = useState(false);
   const [putOffDays, setPutOffDays] = useState("1");
-  const itemRef = useRef<HTMLDivElement>(null);
 
   const isDeadline = !!task.deadlineName;
+  const isDone = task.status === "complete" || task.status === "skipped";
 
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: task.id, disabled: !isDndEnabled });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: task.id,
+    disabled: !isDndEnabled,
+  });
 
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
+  const style = { transform: CSS.Transform.toString(transform), transition };
+
+  const undo = () => {
+    if (isDeadline && onUndoDeadline) onUndoDeadline(task.id);
+    else onStatusChange(task.id, "incomplete");
   };
 
   const handleComplete = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (isReadOnly) return;
-
-    if (task.status === "complete") {
-      if (isDeadline && onUndoDeadline) {
-        onUndoDeadline(task.id);
-      } else {
-        onStatusChange(task.id, "incomplete");
-      }
-      return;
-    }
-
+    if (task.status === "complete") return undo();
     playCompletionSound();
     triggerConfetti();
-
-    if (isDeadline && onCompleteDeadline) {
-      onCompleteDeadline(task.id);
-    } else {
-      onStatusChange(task.id, "complete");
-    }
+    if (isDeadline && onCompleteDeadline) onCompleteDeadline(task.id);
+    else onStatusChange(task.id, "complete");
   };
 
   const handleSkip = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (isReadOnly) return;
-
-    if (task.status === "skipped") {
-      if (isDeadline && onUndoDeadline) {
-        onUndoDeadline(task.id);
-      } else {
-        onStatusChange(task.id, "incomplete");
-      }
-      return;
-    }
-
+    if (task.status === "skipped") return undo();
     playSkipSound();
     showFrownyFace();
     onStatusChange(task.id, "skipped");
@@ -153,178 +173,162 @@ export function TaskItem({
   const handlePutOff = () => {
     const days = parseInt(putOffDays);
     if (isNaN(days) || days < 1) return;
-
     playSkipSound();
     showFrownyFace();
-
-    if (onPutOffDeadline) {
-      onPutOffDeadline(task.id, days);
-    }
+    onPutOffDeadline?.(task.id, days);
     setPutOffOpen(false);
     setPutOffDays("1");
   };
 
-  const handleUndo = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (isDeadline && onUndoDeadline) {
-      onUndoDeadline(task.id);
+  // The box toggles completion; skipped rows reset to incomplete.
+  const handleStatusBox = (e: React.MouseEvent) => {
+    if (task.status === "skipped") {
+      e.stopPropagation();
+      undo();
     } else {
-      onStatusChange(task.id, "incomplete");
+      handleComplete(e);
     }
   };
 
-  const statusIcon = () => {
-    if (task.isExempt) {
-      return (
-        <div className="w-5 h-5 rounded-md flex items-center justify-center bg-violet-100 dark:bg-violet-900/40 text-violet-500 dark:text-violet-400">
-          <ShieldCheck className="w-3.5 h-3.5" />
-        </div>
-      );
-    }
-
-    switch (task.status) {
-      case "complete":
-        return (
-          <div className="w-5 h-5 rounded-md flex items-center justify-center bg-emerald-500 dark:bg-emerald-500 text-white">
-            <Check className="w-3.5 h-3.5" strokeWidth={3} />
-          </div>
-        );
-      case "skipped":
-        return (
-          <div className={cn(
-            "w-5 h-5 rounded-md flex items-center justify-center text-white",
-            isDeadline ? "bg-orange-400 dark:bg-orange-500" : "bg-amber-400 dark:bg-amber-500",
-          )}>
-            {isDeadline ? <Clock className="w-3 h-3" /> : <SkipForward className="w-3 h-3" />}
-          </div>
-        );
-      case "partial":
-        return (
-          <div className="w-5 h-5 rounded-md flex items-center justify-center overflow-hidden relative">
-            <div className="absolute inset-0 bg-emerald-500" style={{ clipPath: "polygon(0 0, 100% 0, 0 100%)" }} />
-            <div className="absolute inset-0 bg-amber-400 dark:bg-amber-500" style={{ clipPath: "polygon(100% 0, 100% 100%, 0 100%)" }} />
-            <Check className="w-3.5 h-3.5 text-white relative z-10" strokeWidth={3} />
-          </div>
-        );
-      default:
-        return (
-          <div className="w-5 h-5 rounded-md border-2 border-gray-300 dark:border-gray-600 flex items-center justify-center" />
-        );
-    }
-  };
+  const canAct = !isReadOnly && !isFuture;
+  const showActions = isHovered || putOffOpen;
 
   return (
     <div
       ref={setNodeRef}
       style={style}
       className={cn(
-        "group flex items-center gap-1 py-1 px-2 rounded-md transition-colors duration-100",
-        (isDragging || isHiddenDuringDrag) && "opacity-0 pointer-events-none",
-        isHovered && "bg-accent/50",
-        task.status === "complete" && "opacity-75",
-        task.status === "skipped" && "opacity-50",
-        task.status === "partial" && "opacity-60",
+        "group flex min-h-10 items-center gap-1 py-1 pr-2 pl-1 transition-colors hover:bg-muted/40 sm:pr-3",
+        (isDragging || isHiddenDuringDrag) && "pointer-events-none opacity-0",
+        task.status === "skipped" && "opacity-55",
       )}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
+      onFocus={() => setIsHovered(true)}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) setIsHovered(false);
+      }}
       data-testid={`task-item-${task.id}`}
     >
-      {isDndEnabled && (
-        <div
-          className="cursor-grab active:cursor-grabbing text-muted-foreground/40 hover:text-muted-foreground transition-colors touch-none"
+      {isDndEnabled ? (
+        <button
+          type="button"
+          className="flex h-7 w-5 shrink-0 cursor-grab touch-none items-center justify-center rounded-md text-muted-foreground/30 transition-colors group-hover:text-muted-foreground/70 hover:text-foreground active:cursor-grabbing"
+          aria-label="Drag to reorder"
           {...attributes}
           {...listeners}
           data-testid={`drag-handle-${task.id}`}
         >
-          <GripVertical className="w-4 h-4" />
-        </div>
+          <GripVertical className="size-3.5" />
+        </button>
+      ) : (
+        <span className="w-1 shrink-0" />
       )}
 
-      <div style={{ width: depth * 20 }} className="flex-shrink-0" />
+      <span style={{ width: depth * INDENT }} className="shrink-0" aria-hidden />
 
       {hasChildren ? (
         <button
+          type="button"
           onClick={() => onToggleCollapse(task.id)}
-          className="w-5 h-5 flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors flex-shrink-0"
+          className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          aria-label={isCollapsed ? "Expand" : "Collapse"}
+          aria-expanded={!isCollapsed}
           data-testid={`collapse-toggle-${task.id}`}
         >
-          {isCollapsed ? (
-            <ChevronRight className="w-4 h-4" />
-          ) : (
-            <ChevronDown className="w-4 h-4" />
-          )}
+          <ChevronRight className={cn("size-4 transition-transform", !isCollapsed && "rotate-90")} />
         </button>
       ) : (
-        <div className="w-5 flex-shrink-0" />
+        <span className="w-6 shrink-0" />
       )}
 
-      <div className="flex-shrink-0">{statusIcon()}</div>
-
-      <span
-        ref={itemRef}
-        className={cn(
-          "flex-1 text-sm leading-relaxed select-none",
-          task.status === "complete" && "line-through text-muted-foreground",
-          task.status === "skipped" &&
-            "line-through text-muted-foreground italic",
-          task.status === "partial" && "text-muted-foreground",
-          task.isExempt && "text-violet-600 dark:text-violet-400",
-        )}
-        data-testid={`task-title-${task.id}`}
+      <button
+        type="button"
+        onClick={handleStatusBox}
+        disabled={!canAct || task.isExempt}
+        className="group/status flex size-7 shrink-0 items-center justify-center rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-default"
+        aria-label={task.status === "complete" ? "Mark incomplete" : task.status === "skipped" ? "Undo skip" : "Complete"}
+        data-testid={`status-box-${task.id}`}
       >
-        {renderTitle(task.title)}
-      </span>
+        <StatusBox task={task} isDeadline={isDeadline} />
+      </button>
 
-      {!isReadOnly && !isFuture && (
-        <div
+      <div className="flex min-w-0 flex-1 items-center gap-2 py-1 pl-1">
+        <span
           className={cn(
-            "flex items-center gap-0.5 transition-opacity duration-100",
-            isHovered || (task.status !== "incomplete" && task.status !== "partial") ? "opacity-100" : "opacity-0",
+            "min-w-0 text-sm leading-snug break-words select-none",
+            hasChildren && depth === 0 && "font-medium",
+            task.status === "complete" && "text-muted-foreground line-through decoration-muted-foreground/40",
+            task.status === "skipped" && "text-muted-foreground italic line-through decoration-muted-foreground/40",
+            task.status === "partial" && "text-muted-foreground",
+            task.isExempt && "text-muted-foreground",
           )}
+          data-testid={`task-title-${task.id}`}
         >
-          {task.status === "complete" || task.status === "skipped" ? (
+          {renderTitle(displayTitle(task))}
+        </span>
+        {isDeadline && (
+          <StatusChip tone={task.status === "skipped" ? "warning" : "brand"}>
+            <CalendarClock />
+            Due
+          </StatusChip>
+        )}
+        {task.isExempt && <StatusChip>Exempt</StatusChip>}
+      </div>
+
+      <div
+        className={cn(
+          "flex shrink-0 items-center gap-0.5 transition-opacity",
+          showActions ? "opacity-100" : "opacity-0",
+          isDone && canAct && "opacity-100 sm:opacity-0 sm:group-hover:opacity-100",
+        )}
+      >
+        {canAct &&
+          (isDone ? (
             <Button
-              size="icon"
+              size="icon-sm"
               variant="ghost"
-              onClick={handleUndo}
-              className="h-6 w-6 text-muted-foreground hover:text-foreground"
+              onClick={(e) => {
+                e.stopPropagation();
+                undo();
+              }}
+              className="text-muted-foreground"
               title="Undo"
+              aria-label="Undo"
               data-testid={`undo-${task.id}`}
             >
-              <RotateCcw className="w-3 h-3" />
+              <RotateCcw className="size-3.5" />
             </Button>
           ) : (
             <>
               <Button
-                size="icon"
+                size="icon-sm"
                 variant="ghost"
                 onClick={handleComplete}
-                className="h-6 w-6 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950"
+                className="text-positive hover:bg-positive/12 hover:text-positive"
                 title="Complete"
+                aria-label="Complete"
                 data-testid={`complete-${task.id}`}
               >
-                <Check className="w-3.5 h-3.5" strokeWidth={2.5} />
+                <Check className="size-4" strokeWidth={2.5} />
               </Button>
               {isDeadline ? (
                 <Popover open={putOffOpen} onOpenChange={setPutOffOpen}>
                   <PopoverTrigger asChild>
                     <Button
-                      size="icon"
+                      size="icon-sm"
                       variant="ghost"
                       onClick={(e) => e.stopPropagation()}
-                      className="h-6 w-6 text-orange-500 hover:text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-950"
+                      className="text-amber-700 hover:bg-warning/15 hover:text-amber-700 dark:text-warning dark:hover:text-warning"
                       title="Put off"
+                      aria-label="Put off"
                       data-testid={`putoff-${task.id}`}
                     >
-                      <Clock className="w-3.5 h-3.5" />
+                      <Clock className="size-3.5" />
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent
-                    className="w-52 p-3"
-                    align="end"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <p className="text-xs font-medium mb-2">Put off for how many days?</p>
+                  <PopoverContent className="w-56 p-3" align="end" onClick={(e) => e.stopPropagation()}>
+                    <p className="mb-2 text-xs font-medium text-muted-foreground">Put off for how many days?</p>
                     <div className="flex items-center gap-2">
                       <Input
                         type="number"
@@ -334,125 +338,93 @@ export function TaskItem({
                         onKeyDown={(e) => {
                           if (e.key === "Enter") handlePutOff();
                         }}
-                        className="h-7 text-sm"
+                        className="tabular-nums"
                         data-testid={`input-putoff-days-${task.id}`}
                         autoFocus
                       />
-                      <Button
-                        size="sm"
-                        onClick={handlePutOff}
-                        className="h-7 px-3 text-xs"
-                        data-testid={`button-putoff-confirm-${task.id}`}
-                      >
-                        Go
+                      <Button onClick={handlePutOff} data-testid={`button-putoff-confirm-${task.id}`}>
+                        Put off
                       </Button>
                     </div>
                   </PopoverContent>
                 </Popover>
               ) : (
                 <Button
-                  size="icon"
+                  size="icon-sm"
                   variant="ghost"
                   onClick={handleSkip}
-                  className="h-6 w-6 text-amber-500 hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950"
+                  className="text-amber-700 hover:bg-warning/15 hover:text-amber-700 dark:text-warning dark:hover:text-warning"
                   title="Skip"
+                  aria-label="Skip"
                   data-testid={`skip-${task.id}`}
                 >
-                  <SkipForward className="w-3.5 h-3.5" />
+                  <SkipForward className="size-3.5" />
                 </Button>
               )}
             </>
-          )}
-        </div>
-      )}
+          ))}
 
-      {isFuture && !isReadOnly && (
-        <Button
-          size="icon"
-          variant="ghost"
-          onClick={() => onToggleExempt(task.id)}
-          className={cn(
-            "h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity",
-            task.isExempt && "opacity-100",
-          )}
-          title={task.isExempt ? "Remove exemption" : "Exempt from progress"}
-          data-testid={`exempt-toggle-${task.id}`}
-        >
-          {task.isExempt ? (
-            <ShieldOff className="w-3.5 h-3.5" />
-          ) : (
-            <ShieldCheck className="w-3.5 h-3.5" />
-          )}
-        </Button>
-      )}
+        {isFuture && !isReadOnly && (
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            onClick={() => onToggleExempt(task.id)}
+            className={cn("text-muted-foreground", task.isExempt && "text-foreground")}
+            title={task.isExempt ? "Remove exemption" : "Exempt from progress"}
+            aria-label={task.isExempt ? "Remove exemption" : "Exempt from progress"}
+            aria-pressed={task.isExempt}
+            data-testid={`exempt-toggle-${task.id}`}
+          >
+            {task.isExempt ? <ShieldOff className="size-3.5" /> : <ShieldCheck className="size-3.5" />}
+          </Button>
+        )}
 
-      {!isReadOnly && onAddChildOpen && (
-        <Button
-          size="icon"
-          variant="ghost"
-          onClick={(e) => {
-            e.stopPropagation();
-            onAddChildOpen(task.id);
-          }}
-          className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
-          title="Add child task"
-          data-testid={`add-child-btn-${task.id}`}
-        >
-          <Plus className="w-3 h-3" />
-        </Button>
-      )}
+        {!isReadOnly && onAddChildOpen && (
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            onClick={(e) => {
+              e.stopPropagation();
+              onAddChildOpen(task.id);
+            }}
+            className="text-muted-foreground"
+            title="Add subtask"
+            aria-label="Add subtask"
+            data-testid={`add-child-btn-${task.id}`}
+          >
+            <Plus className="size-3.5" />
+          </Button>
+        )}
+      </div>
     </div>
   );
 }
 
-export function TaskItemOverlay({
-  task,
-  depth,
-  hasChildren,
-}: {
-  task: DailyTask;
-  depth: number;
-  hasChildren: boolean;
-}) {
-  const statusIcon = () => {
-    switch (task.status) {
-      case "complete":
-        return (
-          <div className="w-5 h-5 rounded-md flex items-center justify-center bg-emerald-500 text-white">
-            <Check className="w-3.5 h-3.5" strokeWidth={3} />
-          </div>
-        );
-      case "skipped":
-        return (
-          <div className="w-5 h-5 rounded-md flex items-center justify-center bg-amber-400 text-white">
-            <SkipForward className="w-3 h-3" />
-          </div>
-        );
-      default:
-        return (
-          <div className="w-5 h-5 rounded-md border-2 border-gray-300 dark:border-gray-600" />
-        );
-    }
-  };
-
+export function TaskItemOverlay({ task, depth, hasChildren }: { task: DailyTask; depth: number; hasChildren: boolean }) {
   return (
-    <div className="flex items-center gap-1 py-1 px-2">
-      <GripVertical className="w-4 h-4 text-muted-foreground/40" />
-      <div style={{ width: depth * 20 }} className="flex-shrink-0" />
+    <div className="flex min-h-10 items-center gap-1 py-1 pr-3 pl-1">
+      <span className="flex w-5 justify-center text-muted-foreground/70">
+        <GripVertical className="size-3.5" />
+      </span>
+      <span style={{ width: depth * INDENT }} className="shrink-0" />
       {hasChildren ? (
-        <ChevronDown className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+        <span className="flex size-6 items-center justify-center text-muted-foreground">
+          <ChevronRight className="size-4 rotate-90" />
+        </span>
       ) : (
-        <div className="w-5 flex-shrink-0" />
+        <span className="w-6 shrink-0" />
       )}
-      <div className="flex-shrink-0">{statusIcon()}</div>
+      <span className="flex size-7 items-center justify-center">
+        <StatusBox task={task} isDeadline={!!task.deadlineName} />
+      </span>
       <span
         className={cn(
-          "flex-1 text-sm leading-relaxed select-none",
-          task.status === "complete" && "line-through text-muted-foreground",
-          task.status === "skipped" && "line-through text-muted-foreground italic",
+          "flex-1 pl-1 text-sm leading-snug select-none",
+          hasChildren && depth === 0 && "font-medium",
+          (task.status === "complete" || task.status === "skipped") && "text-muted-foreground line-through",
         )}
       >
-        {task.title}
+        {displayTitle(task)}
       </span>
     </div>
   );

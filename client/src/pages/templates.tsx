@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Save, RotateCcw, Check } from "lucide-react";
+import { toast } from "sonner";
+import { Check, RotateCcw, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Skeleton } from "@/components/ui/skeleton";
+import { PageHeader, Segmented, StatusChip } from "@/components/app-ui";
 import { apiRequest } from "@/lib/queryClient";
-import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import type { TaskTemplate, TemplateType } from "@shared/schema";
 
@@ -63,7 +64,6 @@ function parseText(text: string): { title: string; depth: number }[] {
 
 function TemplateEditor({ templateType }: { templateType: TemplateType }) {
   const queryClient = useQueryClient();
-  const { toast } = useToast();
   const [text, setText] = useState("");
   const [savedText, setSavedText] = useState("");
   const [justSaved, setJustSaved] = useState(false);
@@ -91,10 +91,10 @@ function TemplateEditor({ templateType }: { templateType: TemplateType }) {
       queryClient.invalidateQueries({ queryKey: ["/api/templates", templateType] });
       setJustSaved(true);
       setTimeout(() => setJustSaved(false), 2000);
-      toast({ title: "Template saved" });
+      toast.success("Template saved");
     },
     onError: () => {
-      toast({ title: "Failed to save template", variant: "destructive" });
+      toast.error("Failed to save template");
     },
   });
 
@@ -157,7 +157,7 @@ function TemplateEditor({ templateType }: { templateType: TemplateType }) {
     const textarea = textareaRef.current;
     if (textarea) {
       textarea.style.height = "auto";
-      textarea.style.height = Math.max(200, textarea.scrollHeight) + "px";
+      textarea.style.height = Math.max(320, textarea.scrollHeight) + "px";
     }
   }, []);
 
@@ -167,60 +167,55 @@ function TemplateEditor({ templateType }: { templateType: TemplateType }) {
 
   const lineCount = text.split("\n").filter((l) => l.trim()).length;
 
+  if (isLoading) {
+    return <Skeleton className="h-96 rounded-2xl" aria-busy aria-label="Loading" />;
+  }
+
   return (
-    <div className="space-y-3">
-      <div className="relative">
-        <textarea
-          ref={textareaRef}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={handleKeyDown}
-          className={cn(
-            "w-full font-mono text-sm leading-relaxed p-4 rounded-lg border resize-none",
-            "bg-muted/30 dark:bg-muted/10 focus:outline-none focus:ring-2 focus:ring-ring",
-            "placeholder:text-muted-foreground/50",
-            hasChanges && "border-amber-500/50 dark:border-amber-400/30",
-          )}
-          placeholder={"Morning\n  Brush teeth\n  Exercise\nEvening\n  Read"}
-          spellCheck={false}
-          data-testid="textarea-template"
-        />
+    <div className="surface overflow-clip">
+      <div className="flex items-center justify-between gap-3 border-b px-4 py-3 sm:px-5">
+        <div className="flex min-w-0 items-center gap-2">
+          <h2 className="font-heading text-[0.9375rem] font-semibold tracking-tight">
+            {templateType === "weekday" ? "Weekday routine" : "Weekend routine"}
+          </h2>
+          {hasChanges && <StatusChip tone="warning">Unsaved</StatusChip>}
+        </div>
+        <span className="text-xs text-muted-foreground tabular-nums" data-testid="text-template-count">
+          {lineCount} {lineCount === 1 ? "task" : "tasks"}
+        </span>
       </div>
 
-      <div className="flex items-center justify-between">
-        <p className="text-xs text-muted-foreground" data-testid="text-template-hint">
-          {lineCount} {lineCount === 1 ? "task" : "tasks"} &middot; Use 2-space indent for subtasks &middot; Tab/Shift+Tab to indent &middot; Ctrl+S to save
-        </p>
+      <textarea
+        ref={textareaRef}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={handleKeyDown}
+        className={cn(
+          "block w-full resize-none bg-transparent px-4 py-4 font-mono text-[0.8125rem] leading-7 outline-none sm:px-5",
+          "placeholder:text-muted-foreground/50 focus-visible:bg-muted/20",
+        )}
+        placeholder={"Morning\n  Brush teeth\n  Exercise\nEvening\n  Read"}
+        spellCheck={false}
+        aria-label={`${templateType} template`}
+        data-testid="textarea-template"
+      />
 
-        <div className="flex items-center gap-2">
+      <div className="flex flex-col gap-3 border-t bg-muted/40 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+        <p className="text-xs text-muted-foreground" data-testid="text-template-hint">
+          Indent 2 spaces for subtasks ·{" "}
+          <kbd className="font-mono">Tab</kbd>/<kbd className="font-mono">Shift+Tab</kbd> to indent ·{" "}
+          <kbd className="font-mono">Ctrl+S</kbd> to save
+        </p>
+        <div className="flex items-center justify-end gap-2">
           {hasChanges && (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={handleReset}
-              data-testid="button-reset-template"
-            >
-              <RotateCcw className="w-3.5 h-3.5 mr-1" />
-              Reset
+            <Button variant="ghost" onClick={handleReset} data-testid="button-reset-template">
+              <RotateCcw />
+              Discard
             </Button>
           )}
-          <Button
-            size="sm"
-            onClick={handleSave}
-            disabled={!hasChanges || syncMutation.isPending}
-            data-testid="button-save-template"
-          >
-            {justSaved ? (
-              <>
-                <Check className="w-3.5 h-3.5 mr-1" />
-                Saved
-              </>
-            ) : (
-              <>
-                <Save className="w-3.5 h-3.5 mr-1" />
-                Save
-              </>
-            )}
+          <Button onClick={handleSave} disabled={!hasChanges || syncMutation.isPending} data-testid="button-save-template">
+            {justSaved ? <Check /> : <Save />}
+            {justSaved ? "Saved" : syncMutation.isPending ? "Saving…" : "Save"}
           </Button>
         </div>
       </div>
@@ -229,31 +224,29 @@ function TemplateEditor({ templateType }: { templateType: TemplateType }) {
 }
 
 export default function TemplatesPage() {
+  const [type, setType] = useState<TemplateType>("weekday");
   return (
-    <div className="p-4 sm:p-6 max-w-2xl mx-auto">
-      <h1 className="text-lg font-semibold tracking-tight mb-1" data-testid="text-templates-title">
-        Templates
-      </h1>
-      <p className="text-sm text-muted-foreground mb-4">
-        Edit your daily routine as text. Indent with 2 spaces to create subtasks.
+    <div className="mx-auto max-w-4xl">
+      <PageHeader
+        title="Templates"
+        titleTestId="text-templates-title"
+        description="Your routine as plain text. New days start from the matching template."
+        actions={
+          <Segmented
+            label="Template"
+            value={type}
+            onChange={setType}
+            options={[
+              { value: "weekday", label: "Weekday", testId: "tab-weekday" },
+              { value: "weekend", label: "Weekend", testId: "tab-weekend" },
+            ]}
+          />
+        }
+      />
+      <TemplateEditor key={type} templateType={type} />
+      <p className="mt-3 text-xs text-muted-foreground">
+        Holidays you mark in Settings use the weekend template.
       </p>
-
-      <Tabs defaultValue="weekday">
-        <TabsList className="mb-4" data-testid="template-tabs">
-          <TabsTrigger value="weekday" data-testid="tab-weekday">
-            Weekday
-          </TabsTrigger>
-          <TabsTrigger value="weekend" data-testid="tab-weekend">
-            Weekend
-          </TabsTrigger>
-        </TabsList>
-        <TabsContent value="weekday">
-          <TemplateEditor templateType="weekday" />
-        </TabsContent>
-        <TabsContent value="weekend">
-          <TemplateEditor templateType="weekend" />
-        </TabsContent>
-      </Tabs>
     </div>
   );
 }

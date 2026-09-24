@@ -82,6 +82,14 @@ Uses Gatekeep (`github.com/Stephen-Schuster/gatekeep`) for enforced step-by-step
 - **Pitfall:** Don't use `queryKey.join("/")`. It produces `/api/days/summary/?start=...` (slash before `?`). Express 404s on the trailing slash. The original Replit dev stack masked this; Vercel/Express does not.
 - **Pitfall:** API returning JSON via curl ≠ UI working. When debugging UI symptoms, always check the actual fetch URL the client sends via browser devtools → Network.
 
+## UI
+
+- Design system follows `docs/UI-STYLE-GUIDE.md` ("OS Wallet" look). Tailwind v4 via `@tailwindcss/vite`; all tokens live in `client/src/index.css` (no `tailwind.config`).
+- shadcn primitives in `client/src/components/ui/` are still Radix-based, restyled to match base-nova. App building blocks (PageHeader, Segmented, ThemeToggle, StatusChip, Kpi, EmptyState) are in `components/app-ui.tsx`; the shell (sidebar, mobile header, tab bar) is `components/app-shell.tsx`.
+- Theme: `localStorage.theme` = light/dark (absent = system), applied pre-paint by the inline script in `client/index.html`, driven at runtime by `lib/theme.ts`.
+- Toasts use `sonner` (`import { toast } from "sonner"`).
+- Logo: `client/public/assets/icon.svg` (favicon). `components/logo.tsx` renders the same geometry in `currentColor` from `components/logo-paths.ts`, which is generated from the SVG; regenerate it if the icon changes.
+
 ## Local Dev Quirks
 
 - Cold start ~1-2s on first request after idle. Acceptable. Options to reduce: warm with cron, or refactor to per-route serverless functions.
@@ -91,13 +99,11 @@ Uses Gatekeep (`github.com/Stephen-Schuster/gatekeep`) for enforced step-by-step
 
 - `.env` — Local environment variables (gitignored)
 - `.env.example` — Template for required environment variables
-- `components.json` — shadcn/ui configuration (new-york style, path aliases)
+- `components.json` — shadcn/ui configuration (Tailwind v4, no config file; path aliases)
 - `drizzle.config.ts` — Drizzle Kit config for database migrations and introspection with Neon Postgres
 - `package.json` — Project metadata, scripts (dev, build, start, test, check, db:push), and dependencies
 - `package-lock.json` — Dependency lockfile
-- `postcss.config.js` — PostCSS plugin config for Tailwind CSS and autoprefixer
 - `README.md` — Project overview with architecture, stack, and Vercel deployment guidance
-- `tailwind.config.ts` — Tailwind CSS theme with shadcn/ui design tokens and content paths
 - `tsconfig.json` — TypeScript config with path aliases (@/, @shared/) for client and server
 - `vercel.json` — Vercel deployment config: SPA rewrites and API function routing
 - `vite.config.ts` — Vite build config with React plugin, path aliases, and `__APP_VERSION__` injection from package.json

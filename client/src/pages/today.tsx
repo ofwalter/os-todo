@@ -1,8 +1,9 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState, useMemo, useRef } from "react";
-import { useRoute } from "wouter";
-import { Eye, EyeOff, Calendar, ChevronsDownUp, ChevronsUpDown, RotateCcw } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Link, useRoute } from "wouter";
+import { toast } from "sonner";
+import { ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, EyeOff, RotateCcw } from "lucide-react";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -14,12 +15,14 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Kpi, PageHeader, SectionHeader } from "@/components/app-ui";
 import { ProgressBar } from "@/components/progress-bar";
 import { TaskTree } from "@/components/task-tree";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
-import { queryClient as qc } from "@/lib/queryClient";
+import { daysFromToday, parseDateStr, toDateStr, todayStr } from "@/lib/dates";
+import { cn } from "@/lib/utils";
 import type { DailyTask, TaskStatus } from "@shared/schema";
 
 function cascadeChildren(tasks: DailyTask[], parentId: number, status: string): DailyTask[] {
@@ -76,31 +79,22 @@ function applyOptimisticParentStatus(tasks: DailyTask[], taskId: number, newStat
   return updated;
 }
 
-function getTodayStr(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+function relativeDayLabel(dateStr: string): string {
+  const diff = daysFromToday(dateStr);
+  if (diff === 0) return "Today";
+  if (diff === -1) return "Yesterday";
+  if (diff === 1) return "Tomorrow";
+  return diff > 0 ? `In ${diff} days` : `${-diff} days ago`;
 }
 
-function formatDateDisplay(dateStr: string): string {
-  const d = new Date(dateStr + "T00:00:00");
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const diff = Math.round(
-    (today.getTime() - d.getTime()) / (1000 * 60 * 60 * 24),
-  );
+function shiftDate(dateStr: string, days: number): string {
+  const d = parseDateStr(dateStr);
+  d.setDate(d.getDate() + days);
+  return toDateStr(d);
+}
 
-  const dayName = d.toLocaleDateString("en-US", { weekday: "long" });
-  const monthDay = d.toLocaleDateString("en-US", {
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-  });
-
-  if (diff === 0) return `Today - ${dayName}, ${monthDay}`;
-  if (diff === 1) return `Yesterday - ${dayName}, ${monthDay}`;
-  if (diff === -1) return `Tomorrow - ${dayName}, ${monthDay}`;
-  if (diff < -1) return `${dayName}, ${monthDay} (in ${Math.abs(diff)} days)`;
-  return `${dayName}, ${monthDay} (${diff} days ago)`;
+function dayHref(dateStr: string): string {
+  return dateStr === todayStr() ? "/" : `/day/${dateStr}`;
 }
 
 function computeProgress(tasks: DailyTask[]): number {
@@ -131,8 +125,8 @@ function computeStats(tasks: DailyTask[]) {
 
 export default function TodayPage() {
   const [, params] = useRoute("/day/:date");
-  const date = params?.date || getTodayStr();
-  const isToday = date === getTodayStr();
+  const date = params?.date || todayStr();
+  const isToday = date === todayStr();
   const isFuture = new Date(date + "T00:00:00") > new Date(new Date().toDateString());
   const [hideCompleted, setHideCompleted] = useState(
     () => localStorage.getItem("hideCompleted") === "true",
@@ -143,7 +137,6 @@ export default function TodayPage() {
     localStorage.setItem("hideCompleted", String(value));
   };
   const queryClient = useQueryClient();
-  const { toast } = useToast();
   const pendingReorderRef = useRef<{
     tempId: number;
     items: { id: number; position: number; parentId: number | null }[];
@@ -323,11 +316,7 @@ export default function TodayPage() {
       if (context?.previous) {
         queryClient.setQueryData(["/api/days", date, "tasks"], context.previous);
       }
-      toast({
-        title: "Failed to complete deadline",
-        description: error.message || "Could not update deadline",
-        variant: "destructive",
-      });
+      toast.error("Failed to complete deadline", { description: error.message || "Could not update deadline" });
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/days", date, "tasks"] });
@@ -356,11 +345,7 @@ export default function TodayPage() {
       if (context?.previous) {
         queryClient.setQueryData(["/api/days", date, "tasks"], context.previous);
       }
-      toast({
-        title: "Failed to put off deadline",
-        description: error.message || "Could not update deadline",
-        variant: "destructive",
-      });
+      toast.error("Failed to put off deadline", { description: error.message || "Could not update deadline" });
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/days", date, "tasks"] });
@@ -389,11 +374,7 @@ export default function TodayPage() {
       if (context?.previous) {
         queryClient.setQueryData(["/api/days", date, "tasks"], context.previous);
       }
-      toast({
-        title: "Failed to undo deadline",
-        description: error.message || "Could not update deadline",
-        variant: "destructive",
-      });
+      toast.error("Failed to undo deadline", { description: error.message || "Could not update deadline" });
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/days", date, "tasks"] });
@@ -460,10 +441,10 @@ export default function TodayPage() {
     },
     onSuccess: (freshTasks) => {
       queryClient.setQueryData(["/api/days", date, "tasks"], freshTasks);
-      toast({ title: "Day reset", description: "Tasks reloaded from the current template." });
+      toast.success("Day reset", { description: "Tasks reloaded from the current template." });
     },
     onError: () => {
-      toast({ title: "Reset failed", description: "Could not reset tasks.", variant: "destructive" });
+      toast.error("Reset failed", { description: "Could not reset tasks." });
       queryClient.invalidateQueries({ queryKey: ["/api/days", date, "tasks"] });
     },
   });
@@ -483,165 +464,211 @@ export default function TodayPage() {
     [tasks],
   );
 
+  const dateObj = parseDateStr(date);
+  const year = dateObj.getFullYear() !== new Date().getFullYear() ? `, ${dateObj.getFullYear()}` : "";
+  const title = dateObj.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" }) + year;
+
+  const header = (
+    <PageHeader
+      eyebrow={relativeDayLabel(date)}
+      title={title}
+      titleTestId="text-date-title"
+      description={isFuture ? "A future day. Use the shield on a task to exempt it from progress." : undefined}
+      actions={
+        <>
+          {!isToday && (
+            <Link href="/" className={buttonVariants({ variant: "outline", size: "sm" })} data-testid="button-go-today">
+              Today
+            </Link>
+          )}
+          <Link
+            href={dayHref(shiftDate(date, -1))}
+            className={buttonVariants({ variant: "outline", size: "icon-sm" })}
+            aria-label="Previous day"
+            title="Previous day"
+            data-testid="button-prev-day"
+          >
+            <ChevronLeft />
+          </Link>
+          <Link
+            href={dayHref(shiftDate(date, 1))}
+            className={buttonVariants({ variant: "outline", size: "icon-sm" })}
+            aria-label="Next day"
+            title="Next day"
+            data-testid="button-next-day"
+          >
+            <ChevronRight />
+          </Link>
+        </>
+      }
+    />
+  );
+
   if (isLoading) {
     return (
-      <div className="p-6 max-w-2xl mx-auto space-y-4">
-        <Skeleton className="h-8 w-64" />
-        <Skeleton className="h-4 w-full" />
-        <div className="space-y-2 mt-6">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <Skeleton key={i} className="h-10 w-full" />
+      <div className="mx-auto max-w-4xl" aria-busy aria-label="Loading">
+        <div className="mb-8 space-y-2">
+          <Skeleton className="h-3 w-20" />
+          <Skeleton className="h-8 w-64" />
+        </div>
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
+          {Array.from({ length: 4 }, (_, i) => (
+            <Skeleton key={i} className="h-28 rounded-2xl" />
           ))}
         </div>
+        <Skeleton className="mt-4 h-96 rounded-2xl sm:mt-6" />
       </div>
     );
   }
 
+  const total = stats?.total ?? 0;
+  const bigNum = "num text-[1.75rem] leading-none font-semibold sm:text-3xl";
+
   return (
-    <div className="p-4 sm:p-6 max-w-2xl mx-auto">
-      <div className="mb-6">
-        <div className="flex items-center gap-2 mb-1">
-          <Calendar className="w-5 h-5 text-primary" />
-          <h1
-            className="text-lg font-semibold tracking-tight"
-            data-testid="text-date-title"
-          >
-            {formatDateDisplay(date)}
-          </h1>
-        </div>
+    <div className="mx-auto max-w-4xl">
+      {header}
 
-        {isFuture && (
-          <p className="text-xs text-muted-foreground mt-1 ml-7">
-            This is a future day. Hover over tasks and click the shield icon to exempt them from progress tracking.
+      <div className="grid grid-cols-3 gap-3 sm:grid-cols-2 sm:gap-4 xl:grid-cols-4">
+        <Kpi label="Progress" className="col-span-3 sm:col-span-1">
+          <p className={bigNum} data-testid="text-progress">
+            {progress}
+            <span className="text-[0.6em] text-muted-foreground">%</span>
           </p>
-        )}
-
-        <div className="mt-3 space-y-1.5">
-          <ProgressBar
-            progress={progress}
-            size="lg"
-            showLabel
-            className="w-full"
-          />
-          {stats && stats.total > 0 && (
-            <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
-              <span data-testid="text-completed-count">
-                {stats.completed} completed
-              </span>
-              <span data-testid="text-incomplete-count">
-                {stats.incomplete} remaining
-              </span>
-              {stats.skipped > 0 && (
-                <span data-testid="text-skipped-count">
-                  {stats.skipped} skipped
-                </span>
-              )}
-              {stats.exempt > 0 && (
-                <span data-testid="text-exempt-count">
-                  {stats.exempt} exempt
-                </span>
-              )}
-            </div>
-          )}
-        </div>
+          <ProgressBar progress={progress} size="sm" />
+        </Kpi>
+        <Kpi label="Completed">
+          <p className={bigNum} data-testid="text-completed-count">
+            {stats?.completed ?? 0}
+            <span className="text-[0.6em] text-muted-foreground">/{total}</span>
+          </p>
+          <p className="text-xs text-muted-foreground">tasks done</p>
+        </Kpi>
+        <Kpi label="Remaining">
+          <p className={bigNum} data-testid="text-incomplete-count">
+            {stats?.incomplete ?? 0}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {stats?.incomplete ? "still to do" : total ? "all clear" : "no tasks"}
+          </p>
+        </Kpi>
+        <Kpi label="Skipped">
+          <p className={bigNum} data-testid="text-skipped-count">
+            {stats?.skipped ?? 0}
+          </p>
+          <p className="text-xs text-muted-foreground" data-testid="text-exempt-count">
+            {stats?.exempt ? `${stats.exempt} exempt` : "none exempt"}
+          </p>
+        </Kpi>
       </div>
 
-      <div className="flex items-center justify-between gap-2 mb-3">
-        <div className="flex items-center gap-2">
-          <h2 className="text-sm font-medium text-muted-foreground">Tasks</h2>
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-6 px-1.5 text-xs text-muted-foreground hover:text-destructive"
-                disabled={resetDay.isPending}
-                data-testid="button-reset-day"
-              >
-                <RotateCcw className="w-3 h-3" />
-              </Button>
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Reset day?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  This will delete all current tasks for this day and reload them fresh from the template. Any custom tasks, completions, or edits will be lost.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction
-                  onClick={() => resetDay.mutate()}
-                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                >
-                  Reset
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        </div>
-        <div className="flex items-center gap-1">
-          {hasParentTasks && (
+      <section className="surface mt-4 overflow-clip sm:mt-6">
+        <SectionHeader
+          className="border-b px-4 py-3.5 sm:items-center sm:px-5"
+          title="Tasks"
+          description={total ? `${stats?.completed ?? 0} of ${total} done` : "Nothing scheduled yet"}
+          actions={
             <>
+              {hasParentTasks && (
+                <>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => setCollapseAll.mutate(true)}
+                        disabled={setCollapseAll.isPending}
+                        aria-label="Collapse all"
+                        data-testid="button-collapse-all"
+                      >
+                        <ChevronsDownUp />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Collapse all</TooltipContent>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => setCollapseAll.mutate(false)}
+                        disabled={setCollapseAll.isPending}
+                        aria-label="Expand all"
+                        data-testid="button-expand-all"
+                      >
+                        <ChevronsUpDown />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Expand all</TooltipContent>
+                  </Tooltip>
+                </>
+              )}
+              <AlertDialog>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <AlertDialogTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        className="text-muted-foreground hover:text-destructive"
+                        disabled={resetDay.isPending}
+                        aria-label="Reset day"
+                        data-testid="button-reset-day"
+                      >
+                        <RotateCcw />
+                      </Button>
+                    </AlertDialogTrigger>
+                  </TooltipTrigger>
+                  <TooltipContent>Reset day from template</TooltipContent>
+                </Tooltip>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Reset this day?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      Deletes every task for this day and reloads it from the template. Custom tasks, completions, and
+                      edits will be lost.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction variant="destructive" onClick={() => resetDay.mutate()}>
+                      Reset day
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
               <Button
-                variant="ghost"
+                variant="outline"
                 size="sm"
-                onClick={() => setCollapseAll.mutate(true)}
-                disabled={setCollapseAll.isPending}
-                className="h-7 px-2 text-xs"
-                data-testid="button-collapse-all"
+                onClick={() => toggleHideCompleted(!hideCompleted)}
+                aria-pressed={hideCompleted}
+                className={cn(
+                  hideCompleted &&
+                    "border-brand/40 bg-brand/10 text-brand hover:bg-brand/15 hover:text-brand dark:border-brand/40 dark:bg-brand/10",
+                )}
+                data-testid="button-toggle-hide"
               >
-                <ChevronsDownUp className="w-3.5 h-3.5 mr-1" />
-                Collapse
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setCollapseAll.mutate(false)}
-                disabled={setCollapseAll.isPending}
-                className="h-7 px-2 text-xs"
-                data-testid="button-expand-all"
-              >
-                <ChevronsUpDown className="w-3.5 h-3.5 mr-1" />
-                Expand
+                <EyeOff />
+                Hide done
               </Button>
             </>
-          )}
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => toggleHideCompleted(!hideCompleted)}
-            data-testid="button-toggle-hide"
-          >
-            {hideCompleted ? (
-              <>
-                <Eye className="w-4 h-4 mr-1.5" />
-                Show all
-              </>
-            ) : (
-              <>
-                <EyeOff className="w-4 h-4 mr-1.5" />
-                Hide done
-              </>
-            )}
-          </Button>
-        </div>
-      </div>
+          }
+        />
 
-      <TaskTree
-        tasks={tasks || []}
-        onStatusChange={handleStatusChange}
-        onToggleCollapse={handleToggleCollapse}
-        onToggleExempt={handleToggleExempt}
-        onReorder={(items) => reorderTasks.mutate(items)}
-        onAddTask={(title) => addTask.mutate({ title })}
-        onAddChildTask={(parentId, title) => addTask.mutate({ title, parentId })}
-        onCompleteDeadline={(id) => completeDeadline.mutate(id)}
-        onPutOffDeadline={(id, days) => putOffDeadline.mutate({ id, days })}
-        onUndoDeadline={(id) => undoDeadline.mutate(id)}
-        hideCompleted={hideCompleted}
-        isFuture={isFuture}
-      />
+        <TaskTree
+          tasks={tasks || []}
+          onStatusChange={handleStatusChange}
+          onToggleCollapse={handleToggleCollapse}
+          onToggleExempt={handleToggleExempt}
+          onReorder={(items) => reorderTasks.mutate(items)}
+          onAddTask={(title) => addTask.mutate({ title })}
+          onAddChildTask={(parentId, title) => addTask.mutate({ title, parentId })}
+          onCompleteDeadline={(id) => completeDeadline.mutate(id)}
+          onPutOffDeadline={(id, days) => putOffDeadline.mutate({ id, days })}
+          onUndoDeadline={(id) => undoDeadline.mutate(id)}
+          hideCompleted={hideCompleted}
+          isFuture={isFuture}
+        />
+      </section>
     </div>
   );
 }

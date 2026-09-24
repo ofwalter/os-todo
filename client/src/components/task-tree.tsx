@@ -16,10 +16,11 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
-import { Plus, X } from "lucide-react";
+import { ListChecks, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { TaskItem, TaskItemOverlay } from "./task-item";
+import { EmptyState } from "@/components/app-ui";
+import { INDENT, TaskItem, TaskItemOverlay } from "./task-item";
 import type { DailyTask, TaskStatus } from "@shared/schema";
 
 interface TaskNode {
@@ -158,11 +159,9 @@ function InlineAddChild({ depth, onAdd, onCancel }: InlineAddChildProps) {
   };
 
   return (
-    <div className="flex items-center gap-1 py-1 px-2">
-      <div className="w-4 flex-shrink-0" />
-      <div style={{ width: depth * 20 }} className="flex-shrink-0" />
-      <div className="w-5 flex-shrink-0" />
-      <div className="w-5 flex-shrink-0" />
+    <div className="flex items-center gap-1.5 bg-muted/30 py-1.5 pr-2 pl-1 sm:pr-3">
+      {/* Line up with the title column: grip + indent + chevron + status box. */}
+      <span className="shrink-0" style={{ width: 20 + depth * INDENT + 24 + 28 }} aria-hidden />
       <Input
         ref={inputRef}
         value={title}
@@ -171,27 +170,21 @@ function InlineAddChild({ depth, onAdd, onCancel }: InlineAddChildProps) {
           if (e.key === "Enter") handleAdd();
           if (e.key === "Escape") onCancel();
         }}
-        placeholder="Child task title..."
-        className="flex-1 text-sm h-7"
+        placeholder="Subtask title…"
+        className="flex-1 bg-card dark:bg-card"
         data-testid="input-add-child"
       />
-      <Button
-        size="sm"
-        onClick={handleAdd}
-        disabled={!title.trim()}
-        className="h-7 px-2 text-xs"
-        data-testid="button-add-child-confirm"
-      >
+      <Button size="sm" onClick={handleAdd} disabled={!title.trim()} data-testid="button-add-child-confirm">
         Add
       </Button>
       <Button
-        size="icon"
+        size="icon-sm"
         variant="ghost"
         onClick={onCancel}
-        className="h-7 w-7"
+        aria-label="Cancel"
         data-testid="button-add-child-cancel"
       >
-        <X className="w-3 h-3" />
+        <X />
       </Button>
     </div>
   );
@@ -387,7 +380,7 @@ export function TaskTree({
   );
 
   return (
-    <div className="space-y-1">
+    <div>
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
@@ -396,58 +389,52 @@ export function TaskTree({
         onDragCancel={handleDragCancel}
         modifiers={[restrictToVerticalAxis]}
       >
-        <SortableContext
-          items={sortableIds}
-          strategy={verticalListSortingStrategy}
-        >
-          {flatItems.flatMap((item) => {
-            const elements: ReactNode[] = [
-              <TaskItem
-                key={item.task.id}
-                task={item.task}
-                depth={item.depth}
-                hasChildren={item.hasChildren}
-                isCollapsed={item.isCollapsed}
-                onStatusChange={onStatusChange}
-                onToggleCollapse={onToggleCollapse}
-                onToggleExempt={onToggleExempt}
-                onCompleteDeadline={onCompleteDeadline}
-                onPutOffDeadline={onPutOffDeadline}
-                onUndoDeadline={onUndoDeadline}
-                isFuture={isFuture}
-                isReadOnly={isReadOnly}
-                isDndEnabled={!isReadOnly}
-                isHiddenDuringDrag={hiddenIds.has(item.task.id)}
-                onAddChildOpen={!isReadOnly && onAddChildTask ? (id) => setAddingChildOf(id) : undefined}
-              />,
-            ];
-            if (addingChildOf === item.task.id) {
-              elements.push(
-                <InlineAddChild
-                  key={`add-child-${item.task.id}`}
-                  depth={item.depth + 1}
-                  onAdd={(title) => {
-                    onAddChildTask!(item.task.id, title);
-                    setAddingChildOf(null);
-                  }}
-                  onCancel={() => setAddingChildOf(null)}
-                />,
-              );
-            }
-            return elements;
-          })}
-        </SortableContext>
-
-        <DragOverlay dropAnimation={null}>
-          {activeId && activeOverlayItems.length > 0 && (
-            <div className="bg-background rounded-lg shadow-lg border border-border/60 py-1">
-              {activeOverlayItems.map((item) => (
-                <TaskItemOverlay
+        <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
+          <div className="divide-y divide-border/60">
+            {flatItems.flatMap((item) => {
+              const elements: ReactNode[] = [
+                <TaskItem
                   key={item.task.id}
                   task={item.task}
                   depth={item.depth}
                   hasChildren={item.hasChildren}
-                />
+                  isCollapsed={item.isCollapsed}
+                  onStatusChange={onStatusChange}
+                  onToggleCollapse={onToggleCollapse}
+                  onToggleExempt={onToggleExempt}
+                  onCompleteDeadline={onCompleteDeadline}
+                  onPutOffDeadline={onPutOffDeadline}
+                  onUndoDeadline={onUndoDeadline}
+                  isFuture={isFuture}
+                  isReadOnly={isReadOnly}
+                  isDndEnabled={!isReadOnly}
+                  isHiddenDuringDrag={hiddenIds.has(item.task.id)}
+                  onAddChildOpen={!isReadOnly && onAddChildTask ? (id) => setAddingChildOf(id) : undefined}
+                />,
+              ];
+              if (addingChildOf === item.task.id) {
+                elements.push(
+                  <InlineAddChild
+                    key={`add-child-${item.task.id}`}
+                    depth={item.depth + 1}
+                    onAdd={(title) => {
+                      onAddChildTask!(item.task.id, title);
+                      setAddingChildOf(null);
+                    }}
+                    onCancel={() => setAddingChildOf(null)}
+                  />,
+                );
+              }
+              return elements;
+            })}
+          </div>
+        </SortableContext>
+
+        <DragOverlay dropAnimation={null}>
+          {activeId && activeOverlayItems.length > 0 && (
+            <div className="divide-y divide-border/60 rounded-xl bg-popover shadow-xl ring-1 ring-foreground/10">
+              {activeOverlayItems.map((item) => (
+                <TaskItemOverlay key={item.task.id} task={item.task} depth={item.depth} hasChildren={item.hasChildren} />
               ))}
             </div>
           )}
@@ -455,34 +442,40 @@ export function TaskTree({
       </DndContext>
 
       {flatItems.length === 0 && (
-        <div className="text-center py-12 text-muted-foreground" data-testid="empty-tasks">
-          <p className="text-sm">No tasks for this day</p>
-          <p className="text-xs mt-1">
-            Set up templates or add tasks below
-          </p>
-        </div>
+        <EmptyState
+          icon={ListChecks}
+          testId="empty-tasks"
+          title={tasks.length > 0 && hideCompleted ? "All done" : "No tasks for this day"}
+          description={
+            tasks.length > 0 && hideCompleted
+              ? "Everything here is finished. Show completed tasks to see them."
+              : "Set up a template, or add a task below."
+          }
+        />
       )}
 
       {!isReadOnly && (
-        <div className="flex items-center gap-2 pt-3 mt-2 border-t border-border/50">
-          <Input
-            value={newTaskTitle}
-            onChange={(e) => setNewTaskTitle(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleAddTask()}
-            placeholder="Add a new task..."
-            className="flex-1 text-sm"
-            data-testid="input-new-task"
-          />
-          <Button
-            size="sm"
-            onClick={handleAddTask}
-            disabled={!newTaskTitle.trim()}
-            data-testid="button-add-task"
-          >
-            <Plus className="w-4 h-4 mr-1" />
+        <form
+          className="flex items-center gap-2 border-t bg-muted/30 px-3 py-3 sm:px-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleAddTask();
+          }}
+        >
+          <div className="relative min-w-0 flex-1">
+            <Plus className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={newTaskTitle}
+              onChange={(e) => setNewTaskTitle(e.target.value)}
+              placeholder="Add a task…"
+              className="h-9 bg-card pl-9 dark:bg-card"
+              data-testid="input-new-task"
+            />
+          </div>
+          <Button type="submit" variant="outline" className="h-9" disabled={!newTaskTitle.trim()} data-testid="button-add-task">
             Add
           </Button>
-        </div>
+        </form>
       )}
     </div>
   );

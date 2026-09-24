@@ -1,17 +1,21 @@
 import { useState, useRef, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import {
-  Calendar,
-  Trash2,
-  Plus,
-  CalendarClock,
-  Download,
-  Upload,
   AlertTriangle,
+  CalendarOff,
+  Download,
+  Loader2,
+  LogOut,
+  Monitor,
+  Moon,
+  Plus,
+  Sun,
+  Trash2,
+  Upload,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import {
   AlertDialog,
@@ -23,8 +27,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { PageHeader, SectionHeader, Segmented } from "@/components/app-ui";
+import { ProgressBar } from "@/components/progress-bar";
+import { useAuth } from "@/hooks/use-auth";
 import { apiRequest } from "@/lib/queryClient";
-import { useToast } from "@/hooks/use-toast";
+import { parseDateStr, todayStr } from "@/lib/dates";
+import { setThemePreference, useThemePreference } from "@/lib/theme";
 import type { Holiday } from "@shared/schema";
 
 const PHASE_LABELS: Record<string, string> = {
@@ -44,7 +52,8 @@ function phaseLabel(phase: string): string {
 
 export default function SettingsPage() {
   const queryClient = useQueryClient();
-  const { toast } = useToast();
+  const { logout } = useAuth();
+  const themePref = useThemePreference();
   const [newHolidayDate, setNewHolidayDate] = useState("");
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [pendingImportData, setPendingImportData] = useState<unknown>(null);
@@ -79,7 +88,7 @@ export default function SettingsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/holidays"] });
       setNewHolidayDate("");
-      toast({ title: "Holiday added" });
+      toast.success("Holiday added");
     },
   });
 
@@ -89,7 +98,7 @@ export default function SettingsPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/holidays"] });
-      toast({ title: "Holiday removed" });
+      toast.success("Holiday removed");
     },
   });
 
@@ -156,17 +165,13 @@ export default function SettingsPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries();
-      toast({ title: "Data imported successfully" });
+      toast.success("Data imported");
       setPendingImportData(null);
       setImportDialogOpen(false);
       setImportProgress(null);
     },
     onError: (err: Error) => {
-      toast({
-        title: "Import failed",
-        description: err.message,
-        variant: "destructive",
-      });
+      toast.error("Import failed", { description: err.message });
       setImportProgress(null);
     },
   });
@@ -188,27 +193,59 @@ export default function SettingsPage() {
       try {
         const parsed = JSON.parse(ev.target?.result as string);
         if (!parsed || parsed.version !== "1") {
-          toast({ title: "Invalid file format", variant: "destructive" });
+          toast.error("Invalid file format");
           return;
         }
         setPendingImportData(parsed);
         setImportDialogOpen(true);
       } catch {
-        toast({ title: "Failed to parse file", variant: "destructive" });
+        toast.error("Couldn't read that file");
       }
     };
     reader.readAsText(file);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
+  const sortedHolidays = [...(holidays ?? [])].sort((a, b) => a.date.localeCompare(b.date));
+  const today = todayStr();
+  const upcomingHolidays = sortedHolidays.filter((h) => h.date >= today);
+  const pastHolidays = sortedHolidays.filter((h) => h.date < today);
+  const importPct =
+    importProgress && importProgress.total > 0
+      ? Math.min(100, Math.round((importProgress.done / importProgress.total) * 100))
+      : 0;
+
+  const holidayRow = (h: Holiday) => (
+    <li
+      key={h.id}
+      className="group flex items-center gap-3 px-3 py-2 transition-colors hover:bg-muted/40"
+      data-testid={`holiday-item-${h.id}`}
+    >
+      <CalendarOff className="size-3.5 shrink-0 text-muted-foreground" />
+      <span className="flex-1 text-sm">
+        {parseDateStr(h.date).toLocaleDateString("en-US", {
+          weekday: "short",
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        })}
+      </span>
+      <Button
+        size="icon-xs"
+        variant="ghost"
+        className="text-muted-foreground hover:text-destructive sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
+        onClick={() => deleteHoliday.mutate(h.id)}
+        aria-label="Remove holiday"
+        data-testid={`button-delete-holiday-${h.id}`}
+      >
+        <Trash2 />
+      </Button>
+    </li>
+  );
+
   return (
-    <div className="p-4 sm:p-6 max-w-2xl mx-auto">
-      <h1 className="text-lg font-semibold tracking-tight mb-1" data-testid="text-settings-title">
-        Settings
-      </h1>
-      <p className="text-sm text-muted-foreground mb-6">
-        Configure your daily routine app
-      </p>
+    <div className="mx-auto max-w-3xl">
+      <PageHeader title="Settings" titleTestId="text-settings-title" description="Appearance, holidays, and your data." />
 
       <AlertDialog
         open={importDialogOpen}
@@ -220,57 +257,43 @@ export default function SettingsPage() {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="w-5 h-5 text-destructive" />
-              Replace all data?
-            </AlertDialogTitle>
+            <span className="mb-1 inline-flex size-10 items-center justify-center rounded-xl bg-destructive/10 text-destructive">
+              <AlertTriangle className="size-5" />
+            </span>
+            <AlertDialogTitle>Replace all data?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently replace all your current templates, tasks,
-              holidays, custom streaks, and deadlines with the data from the file. This
-              cannot be undone. Export your current data first if you want a
-              backup.
+              This permanently replaces your templates, tasks, holidays, streaks, and deadlines with the file's
+              contents. It can't be undone, so export a backup first if you might want it.
             </AlertDialogDescription>
           </AlertDialogHeader>
           {importProgress && (
-            <div className="my-2 space-y-2" data-testid="import-progress">
-              <div className="text-sm text-muted-foreground">
-                {phaseLabel(importProgress.phase)} — {importProgress.done} /{" "}
-                {importProgress.total}
+            <div className="space-y-2 rounded-xl bg-muted/50 p-3" data-testid="import-progress">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-medium">{phaseLabel(importProgress.phase)}…</span>
+                <span className="text-muted-foreground tabular-nums">
+                  {importProgress.done.toLocaleString()} / {importProgress.total.toLocaleString()}
+                </span>
               </div>
-              <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-                <div
-                  className="h-full bg-primary transition-[width] duration-150"
-                  style={{
-                    width: `${
-                      importProgress.total > 0
-                        ? Math.min(
-                            100,
-                            (importProgress.done / importProgress.total) * 100,
-                          )
-                        : 0
-                    }%`,
-                  }}
-                />
-              </div>
-              <div className="text-xs text-muted-foreground">
-                Don't close this tab until the import finishes.
-              </div>
+              <ProgressBar progress={importPct} size="sm" />
+              <p className="text-xs text-muted-foreground">Keep this tab open until the import finishes.</p>
             </div>
           )}
           <AlertDialogFooter>
-            <AlertDialogCancel
-              disabled={importData.isPending}
-              data-testid="button-import-cancel"
-            >
+            <AlertDialogCancel disabled={importData.isPending} data-testid="button-import-cancel">
               Cancel
             </AlertDialogCancel>
             <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={() => pendingImportData && importData.mutate(pendingImportData)}
+              variant="destructive"
+              onClick={(e) => {
+                // Keep the dialog open to show progress; it closes on success.
+                e.preventDefault();
+                if (pendingImportData) importData.mutate(pendingImportData);
+              }}
               disabled={importData.isPending}
               data-testid="button-import-confirm"
             >
-              {importData.isPending ? "Importing…" : "Yes, replace all data"}
+              {importData.isPending && <Loader2 className="animate-spin" />}
+              {importData.isPending ? "Importing…" : "Replace all data"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -285,113 +308,133 @@ export default function SettingsPage() {
         data-testid="input-import-file"
       />
 
-      <div className="space-y-6">
-        <Card className="p-4 space-y-3">
-          <div className="flex items-center gap-2 mb-2">
-            <CalendarClock className="w-4 h-4 text-primary" />
-            <h2 className="text-sm font-medium">Holidays</h2>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            Mark weekdays as holidays to use your weekend template instead.
-          </p>
+      <div className="space-y-4 sm:space-y-6">
+        <Card className="px-5 sm:px-6 sm:py-6">
+          <SectionHeader
+            title="Appearance"
+            description="Light, dark, or follow your device."
+            actions={
+              <Segmented
+                label="Theme"
+                value={themePref}
+                onChange={setThemePreference}
+                options={[
+                  { value: "light", label: "Light", icon: Sun },
+                  { value: "system", label: "System", icon: Monitor },
+                  { value: "dark", label: "Dark", icon: Moon },
+                ]}
+              />
+            }
+          />
+        </Card>
 
-          <div className="flex items-center gap-2">
+        <Card className="px-5 sm:px-6 sm:py-6">
+          <SectionHeader title="Holidays" description="Weekdays marked here use your weekend template." />
+          <form
+            className="flex items-center gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleAddHoliday();
+            }}
+          >
             <Input
               type="date"
               value={newHolidayDate}
               onChange={(e) => setNewHolidayDate(e.target.value)}
-              className="flex-1 text-sm"
+              className="h-9 flex-1 bg-card sm:max-w-xs dark:bg-card"
+              aria-label="Holiday date"
               data-testid="input-holiday-date"
             />
             <Button
-              size="sm"
-              onClick={handleAddHoliday}
-              disabled={!newHolidayDate}
+              type="submit"
+              variant="outline"
+              className="h-9"
+              disabled={!newHolidayDate || addHoliday.isPending}
               data-testid="button-add-holiday"
             >
-              <Plus className="w-4 h-4 mr-1" />
+              <Plus />
               Add
             </Button>
-          </div>
+          </form>
 
-          {holidays && holidays.length > 0 && (
-            <div className="space-y-1 mt-2">
-              {holidays
-                .sort((a, b) => a.date.localeCompare(b.date))
-                .map((h) => (
-                  <div
-                    key={h.id}
-                    className="flex items-center gap-2 py-1 px-2 rounded-md hover:bg-accent/50 group"
-                    data-testid={`holiday-item-${h.id}`}
-                  >
-                    <Calendar className="w-3.5 h-3.5 text-muted-foreground" />
-                    <span className="flex-1 text-sm">
-                      {new Date(h.date + "T00:00:00").toLocaleDateString(
-                        "en-US",
-                        {
-                          weekday: "short",
-                          month: "short",
-                          day: "numeric",
-                          year: "numeric",
-                        },
-                      )}
-                    </span>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="h-6 w-6 opacity-0 group-hover:opacity-100"
-                      onClick={() => deleteHoliday.mutate(h.id)}
-                      data-testid={`button-delete-holiday-${h.id}`}
-                    >
-                      <Trash2 className="w-3 h-3 text-destructive" />
-                    </Button>
-                  </div>
-                ))}
+          {sortedHolidays.length === 0 ? (
+            <div
+              className="flex flex-col items-center justify-center gap-1 rounded-xl border border-dashed py-8 text-center"
+              data-testid="empty-holidays"
+            >
+              <p className="text-sm font-medium">No holidays set</p>
+              <p className="text-xs text-muted-foreground">Pick a date above to add one.</p>
             </div>
-          )}
-
-          {(!holidays || holidays.length === 0) && (
-            <p className="text-xs text-muted-foreground py-2" data-testid="empty-holidays">
-              No holidays set
-            </p>
+          ) : (
+            <div className="space-y-4">
+              {upcomingHolidays.length > 0 && (
+                <div>
+                  <p className="eyebrow mb-2">Upcoming</p>
+                  <ul className="divide-y overflow-hidden rounded-xl border">{upcomingHolidays.map(holidayRow)}</ul>
+                </div>
+              )}
+              {pastHolidays.length > 0 && (
+                <div>
+                  <p className="eyebrow mb-2">Past</p>
+                  <ul className="divide-y overflow-hidden rounded-xl border opacity-70">{pastHolidays.map(holidayRow)}</ul>
+                </div>
+              )}
+            </div>
           )}
         </Card>
 
-        <Card className="p-4 space-y-3">
-          <div className="flex items-center gap-2 mb-2">
-            <Download className="w-4 h-4 text-primary" />
-            <h2 className="text-sm font-medium">Import & Export</h2>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            Back up your data or move it to another database. The export
-            includes all templates, tasks, holidays, custom streaks, and
-            deadlines.
-          </p>
-          <div className="flex items-center gap-3 pt-1">
-            <Button
-              size="sm"
-              variant="outline"
+        <Card className="px-5 sm:px-6 sm:py-6">
+          <SectionHeader
+            title="Import & export"
+            description="Back up everything (templates, tasks, holidays, streaks, deadlines) or restore from a backup."
+          />
+          <div className="grid gap-3 sm:grid-cols-2">
+            <button
+              type="button"
               onClick={handleExport}
+              className="group flex items-start gap-3 rounded-xl border p-3.5 text-left transition-colors hover:bg-muted/40"
               data-testid="button-export"
-              className="flex items-center gap-1.5"
             >
-              <Download className="w-3.5 h-3.5" />
-              Export data
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
+              <span className="inline-flex size-9 shrink-0 items-center justify-center rounded-xl bg-brand/10 text-brand">
+                <Download className="size-[1.05rem]" />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-sm font-medium">Export data</span>
+                <span className="block text-xs text-muted-foreground">Download a JSON backup</span>
+              </span>
+            </button>
+            <button
+              type="button"
               onClick={() => fileInputRef.current?.click()}
+              className="group flex items-start gap-3 rounded-xl border p-3.5 text-left transition-colors hover:bg-muted/40"
               data-testid="button-import"
-              className="flex items-center gap-1.5"
             >
-              <Upload className="w-3.5 h-3.5" />
-              Import data
-            </Button>
+              <span className="inline-flex size-9 shrink-0 items-center justify-center rounded-xl bg-warning/15 text-amber-700 dark:text-warning">
+                <Upload className="size-[1.05rem]" />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-sm font-medium">Import data</span>
+                <span className="block text-xs text-muted-foreground">Replaces everything currently stored</span>
+              </span>
+            </button>
           </div>
-          <p className="text-xs text-muted-foreground/70">
-            Importing will replace all existing data.
-          </p>
+        </Card>
+
+        <Card className="px-5 sm:px-6 sm:py-6">
+          <SectionHeader
+            title="Account"
+            description={
+              <>
+                Signed in to this private workspace · <span className="font-mono">v{__APP_VERSION__}</span>
+              </>
+            }
+            actions={
+              <Button variant="outline" onClick={logout} data-testid="button-settings-logout">
+                <LogOut />
+                Log out
+              </Button>
+            }
+          />
         </Card>
       </div>
     </div>

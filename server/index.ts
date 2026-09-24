@@ -1,4 +1,5 @@
 import express, { type Request, Response, NextFunction } from "express";
+import { pathToFileURL } from "node:url";
 import { registerRoutes } from "./routes.js";
 
 declare module "http" {
@@ -79,7 +80,8 @@ export async function getApp(): Promise<express.Express> {
 
 // Local dev / standalone server entrypoint.
 // On Vercel the app is imported by api/index.ts and never reaches this block.
-const isMainModule = import.meta.url === `file://${process.argv[1]}`;
+// pathToFileURL handles Windows paths (C:\... -> file:///C:/...).
+const isMainModule = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMainModule) {
   (async () => {
     const { createServer } = await import("http");

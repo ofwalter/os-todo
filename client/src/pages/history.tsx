@@ -1,8 +1,11 @@
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { cn } from "@/lib/utils";
-import { getProgressDotColor } from "@/components/progress-bar";
+import { Kpi, PageHeader, SectionHeader } from "@/components/app-ui";
+import { PROGRESS_LEGEND, getProgressDotColor } from "@/components/progress-bar";
 import { Skeleton } from "@/components/ui/skeleton";
+import { todayStr } from "@/lib/dates";
 
 interface DaySummary {
   date: string;
@@ -11,246 +14,192 @@ interface DaySummary {
   completed: number;
 }
 
-function getMonthData(year: number, month: number) {
-  const firstDay = new Date(year, month, 1);
-  const lastDay = new Date(year, month + 1, 0);
-  const startDow = firstDay.getDay();
-  const daysInMonth = lastDay.getDate();
-
-  return { startDow, daysInMonth, firstDay, lastDay };
-}
-
-function formatMonthLabel(year: number, month: number): string {
-  return new Date(year, month, 1).toLocaleDateString("en-US", {
-    month: "short",
-  });
-}
+const DAY_NAMES = ["S", "M", "T", "W", "T", "F", "S"];
 
 function MonthGrid({
   year,
   month,
   progressMap,
+  today,
   onDayClick,
-  boxSize,
-  gap,
 }: {
   year: number;
   month: number;
   progressMap: Map<string, number>;
+  today: string;
   onDayClick: (date: string) => void;
-  boxSize: number;
-  gap: number;
 }) {
-  const { startDow, daysInMonth } = getMonthData(year, month);
-  const dayNames = ["S", "M", "T", "W", "T", "F", "S"];
-
-  const cells: (number | null)[] = [];
-  for (let i = 0; i < startDow; i++) cells.push(null);
-  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
-  while (cells.length % 7 !== 0) cells.push(null);
-
-  const weeks: (number | null)[][] = [];
-  for (let i = 0; i < cells.length; i += 7) {
-    weeks.push(cells.slice(i, i + 7));
-  }
+  const startDow = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const label = new Date(year, month, 1).toLocaleDateString("en-US", { month: "long" });
 
   return (
-    <div>
-      <div
-        className="text-xs font-medium text-muted-foreground mb-1 text-center"
-        style={{ fontSize: Math.max(9, boxSize * 0.7) }}
-      >
-        {formatMonthLabel(year, month)}
-      </div>
-      {boxSize >= 10 && (
-        <div className="flex" style={{ gap }}>
-          {dayNames.map((d, i) => (
-            <div
-              key={i}
-              className="text-center text-muted-foreground/50"
-              style={{
-                width: boxSize,
-                height: boxSize,
-                fontSize: Math.max(7, boxSize * 0.55),
-                lineHeight: `${boxSize}px`,
-              }}
-            >
-              {d}
-            </div>
-          ))}
-        </div>
-      )}
-      <div className="flex flex-col" style={{ gap }}>
-        {weeks.map((week, wi) => (
-          <div key={wi} className="flex" style={{ gap }}>
-            {week.map((day, di) => {
-              if (day === null) {
-                return (
-                  <div
-                    key={di}
-                    style={{ width: boxSize, height: boxSize }}
-                  />
-                );
-              }
-
-              const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-              const progress = progressMap.get(dateStr);
-
-              return (
-                <div
-                  key={di}
-                  className={cn(
-                    "rounded-sm cursor-pointer transition-transform hover:scale-125",
-                    progress !== undefined
-                      ? getProgressDotColor(progress)
-                      : "bg-gray-100 dark:bg-gray-800/50",
-                  )}
-                  style={{ width: boxSize, height: boxSize }}
-                  title={`${dateStr}: ${progress !== undefined ? `${progress}%` : "No data"}`}
-                  onClick={() => onDayClick(dateStr)}
-                  data-testid={`history-day-${dateStr}`}
-                />
-              );
-            })}
-          </div>
+    <div className="min-w-0">
+      <p className="eyebrow mb-2">{label}</p>
+      <div className="grid grid-cols-7 gap-[3px]">
+        {DAY_NAMES.map((d, i) => (
+          <span key={i} className="pb-0.5 text-center text-[0.5625rem] font-medium text-muted-foreground/60">
+            {d}
+          </span>
         ))}
+        {Array.from({ length: startDow }, (_, i) => (
+          <span key={`pad-${i}`} />
+        ))}
+        {Array.from({ length: daysInMonth }, (_, i) => {
+          const day = i + 1;
+          const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+          const progress = progressMap.get(dateStr);
+          const isFuture = dateStr > today;
+          return (
+            <button
+              key={dateStr}
+              type="button"
+              className={cn(
+                "aspect-square rounded-[3px] transition-[box-shadow,opacity] outline-none hover:ring-2 hover:ring-foreground/25 focus-visible:ring-2 focus-visible:ring-ring",
+                getProgressDotColor(progress),
+                isFuture && progress === undefined && "opacity-40",
+                dateStr === today && "ring-1 ring-foreground/60",
+              )}
+              title={`${dateStr}: ${progress !== undefined ? `${progress}%` : "No data"}`}
+              aria-label={`${dateStr}, ${progress !== undefined ? `${progress}% done` : "no data"}`}
+              onClick={() => onDayClick(dateStr)}
+              data-testid={`history-day-${dateStr}`}
+            />
+          );
+        })}
       </div>
     </div>
   );
 }
 
-function YearGrid({
-  year,
-  progressMap,
-  onDayClick,
-  boxSize,
-  gap,
-}: {
-  year: number;
-  progressMap: Map<string, number>;
-  onDayClick: (date: string) => void;
-  boxSize: number;
-  gap: number;
-}) {
-  const months: number[][] = [];
-  for (let row = 0; row < 4; row++) {
-    const rowMonths: number[] = [];
-    for (let col = 0; col < 3; col++) {
-      rowMonths.push(row * 3 + col);
-    }
-    months.push(rowMonths);
-  }
-
-  return (
-    <div>
-      <h3 className="text-sm font-semibold mb-2 text-center">{year}</h3>
-      <div className="flex flex-col gap-3">
-        {months.map((row, ri) => (
-          <div key={ri} className="flex gap-4 justify-center flex-wrap">
-            {row.map((month) => (
-              <MonthGrid
-                key={month}
-                year={year}
-                month={month}
-                progressMap={progressMap}
-                onDayClick={onDayClick}
-                boxSize={boxSize}
-                gap={gap}
-              />
-            ))}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+function average(values: number[]): number | null {
+  if (values.length === 0) return null;
+  return Math.round(values.reduce((a, b) => a + b, 0) / values.length);
 }
 
 export default function HistoryPage() {
   const [, navigate] = useLocation();
+  const today = todayStr();
 
   const { data: allSummary, isLoading } = useQuery<DaySummary[]>({
     queryKey: ["/api/days/all-summary"],
   });
+  const { data: streaks } = useQuery<{ streak100: number; streak75: number; streak50: number }>({
+    queryKey: ["/api/streaks", `?today=${today}`],
+  });
 
-  const progressMap = new Map<string, number>();
-  allSummary?.forEach((s) => progressMap.set(s.date, s.progress));
+  const { progressMap, years, tracked, stats } = useMemo(() => {
+    // Only count days that had something to do; future days aren't history yet.
+    const tracked = (allSummary ?? []).filter((s) => s.total > 0 && s.date <= today);
+    const progressMap = new Map((allSummary ?? []).map((s) => [s.date, s.progress]));
+    const yearSet = new Set((allSummary ?? []).map((s) => Number(s.date.slice(0, 4))));
+    yearSet.add(new Date().getFullYear());
+    return {
+      progressMap,
+      tracked,
+      years: Array.from(yearSet).sort((a, b) => b - a),
+      stats: {
+        average: average(tracked.map((s) => s.progress)),
+        strongDays: tracked.filter((s) => s.progress >= 90).length,
+      },
+    };
+  }, [allSummary, today]);
 
-  const years = new Set<number>();
-  allSummary?.forEach((s) => years.add(new Date(s.date).getFullYear()));
-
-  const currentYear = new Date().getFullYear();
-  if (years.size === 0) years.add(currentYear);
-
-  const sortedYears = Array.from(years).sort((a, b) => b - a);
-
-  const yearCount = sortedYears.length;
-  let boxSize = 14;
-  let gap = 2;
-  if (yearCount > 5) {
-    boxSize = 10;
-    gap = 1;
-  }
-  if (yearCount > 10) {
-    boxSize = 7;
-    gap = 1;
-  }
-
-  const handleDayClick = (date: string) => {
-    const today = new Date();
-    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-    if (date === todayStr) {
-      navigate("/");
-    } else {
-      navigate(`/day/${date}`);
-    }
-  };
+  const handleDayClick = (date: string) => navigate(date === today ? "/" : `/day/${date}`);
 
   if (isLoading) {
     return (
-      <div className="p-6 max-w-4xl mx-auto space-y-4">
-        <Skeleton className="h-8 w-48" />
-        <div className="grid grid-cols-3 gap-4">
-          {Array.from({ length: 12 }).map((_, i) => (
-            <Skeleton key={i} className="h-32" />
+      <div aria-busy aria-label="Loading">
+        <div className="mb-8 space-y-2">
+          <Skeleton className="h-8 w-40" />
+          <Skeleton className="h-4 w-72" />
+        </div>
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
+          {Array.from({ length: 4 }, (_, i) => (
+            <Skeleton key={i} className="h-28 rounded-2xl" />
           ))}
         </div>
+        <Skeleton className="mt-6 h-[32rem] rounded-2xl" />
       </div>
     );
   }
 
-  return (
-    <div className="p-4 sm:p-6 max-w-5xl mx-auto">
-      <h1 className="text-lg font-semibold tracking-tight mb-1" data-testid="text-history-title">
-        History
-      </h1>
-      <p className="text-sm text-muted-foreground mb-6">
-        Your complete progress history, color-coded by daily completion
-      </p>
+  const bigNum = "num text-[1.75rem] leading-none font-semibold sm:text-3xl";
 
-      <div className="flex items-center gap-4 mb-6 flex-wrap">
-        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <span>Less</span>
-          <div className="w-3 h-3 rounded-sm bg-gray-100 dark:bg-gray-800/50" />
-          <div className="w-3 h-3 rounded-sm bg-red-500 dark:bg-red-400" />
-          <div className="w-3 h-3 rounded-sm bg-orange-500 dark:bg-orange-400" />
-          <div className="w-3 h-3 rounded-sm bg-amber-500 dark:bg-amber-400" />
-          <div className="w-3 h-3 rounded-sm bg-lime-500 dark:bg-lime-400" />
-          <div className="w-3 h-3 rounded-sm bg-emerald-500 dark:bg-emerald-400" />
-          <span>More</span>
-        </div>
+  return (
+    <div>
+      <PageHeader
+        title="History"
+        titleTestId="text-history-title"
+        description="Every day you've tracked, shaded by how much got done. Tap a day to open it."
+      />
+
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
+        <Kpi label="Days tracked">
+          <p className={bigNum}>{tracked.length.toLocaleString()}</p>
+          <p className="text-xs text-muted-foreground">with at least one task</p>
+        </Kpi>
+        <Kpi label="Average completion">
+          <p className={bigNum}>
+            {stats.average ?? "—"}
+            {stats.average !== null && <span className="text-[0.6em] text-muted-foreground">%</span>}
+          </p>
+          <p className="text-xs text-muted-foreground">across tracked days</p>
+        </Kpi>
+        <Kpi label="90%+ days">
+          <p className={bigNum}>{stats.strongDays.toLocaleString()}</p>
+          <p className="text-xs text-muted-foreground">
+            {tracked.length ? `${Math.round((stats.strongDays / tracked.length) * 100)}% of tracked days` : "none yet"}
+          </p>
+        </Kpi>
+        <Kpi label="Current streak">
+          <p className={bigNum}>
+            {streaks?.streak100 ?? "—"}
+            <span className="ml-1 font-sans text-sm font-normal text-muted-foreground">days</span>
+          </p>
+          <p className="text-xs text-muted-foreground">in a row at 90%+</p>
+        </Kpi>
       </div>
 
-      <div className="space-y-8">
-        {sortedYears.map((year) => (
-          <YearGrid
-            key={year}
-            year={year}
-            progressMap={progressMap}
-            onDayClick={handleDayClick}
-            boxSize={boxSize}
-            gap={gap}
-          />
-        ))}
+      <div className="mt-4 space-y-4 sm:mt-6 sm:space-y-6">
+        {years.map((year) => {
+          const yearDays = tracked.filter((s) => s.date.startsWith(`${year}-`));
+          const yearAvg = average(yearDays.map((s) => s.progress));
+          return (
+            <section key={year} className="surface p-5 sm:p-6">
+              <SectionHeader
+                title={<span className="num">{year}</span>}
+                description={
+                  yearDays.length
+                    ? `${yearDays.length} tracked days · ${yearAvg}% average`
+                    : "No tracked days"
+                }
+                actions={
+                  year === years[0] && <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                    {PROGRESS_LEGEND.map((l) => (
+                      <span key={l.label} className="inline-flex items-center gap-1.5">
+                        <span aria-hidden className={cn("size-2.5 rounded-[3px]", l.className)} />
+                        {l.label}
+                      </span>
+                    ))}
+                  </div>
+                }
+              />
+              <div className="mt-5 grid grid-cols-2 gap-x-6 gap-y-6 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
+                {Array.from({ length: 12 }, (_, month) => (
+                  <MonthGrid
+                    key={month}
+                    year={year}
+                    month={month}
+                    progressMap={progressMap}
+                    today={today}
+                    onDayClick={handleDayClick}
+                  />
+                ))}
+              </div>
+            </section>
+          );
+        })}
       </div>
     </div>
   );
